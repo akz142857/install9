@@ -17,6 +17,8 @@ OPENCLAW_PKG="openclaw"
 OPENCLAW_CONFIG_DIR="$HOME/.openclaw"
 OPENCLAW_CONFIG="$OPENCLAW_CONFIG_DIR/openclaw.json"
 TOTAL_PHASES=8
+INSTALL9_BIN="$HOME/.local/bin/install9"
+INSTALL9_URL="https://install9.ai/openclaw"
 
 # ── CLI arguments ────────────────────────────────────────────────────
 NON_INTERACTIVE=false
@@ -29,6 +31,7 @@ ARG_SLACK_BOT_TOKEN=""
 ARG_SLACK_APP_TOKEN=""
 ARG_DISCORD_BOT_TOKEN=""
 ARG_UNINSTALL=false
+ARG_SELF_UPDATE=false
 ARG_SKIP_SECURITY=false
 ARG_SKIP_CHANNEL=false
 ARG_SKIP_DEPS=false
@@ -56,6 +59,7 @@ OpenClaw Installer
 Usage:
   curl -fsSL https://install9.ai/openclaw | bash
   curl -fsSL https://install9.ai/openclaw | bash -s -- [OPTIONS]
+  install9 [OPTIONS]                          (after first install)
 
 Options:
   --non-interactive            Skip all prompts (use with flags below)
@@ -68,6 +72,7 @@ Options:
   --slack-app-token <token>    Slack App Token (xapp-..., for Socket Mode)
   --discord-token <token>      Discord Bot Token
   --uninstall                  Uninstall OpenClaw and clean up
+  --self-update                Update the install9 command itself
   --skip-channel               Skip channel setup
   --skip-security              Skip security hardening
   --skip-deps                  Skip dependency installation
@@ -106,6 +111,7 @@ parse_args() {
         if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--discord-token requires a value"; fi
         ARG_DISCORD_BOT_TOKEN="$2"; shift ;;
       --uninstall)         ARG_UNINSTALL=true ;;
+      --self-update)       ARG_SELF_UPDATE=true ;;
       --skip-channel)      ARG_SKIP_CHANNEL=true ;;
       --skip-security)     ARG_SKIP_SECURITY=true ;;
       --skip-deps)         ARG_SKIP_DEPS=true ;;
@@ -234,9 +240,10 @@ detect_platform() {
   # Shell type and RC file
   local current_shell="${SHELL:-/bin/bash}"
   case "$current_shell" in
-    */zsh)  SHELL_TYPE="zsh";  SHELL_RC="$HOME/.zshrc" ;;
-    */fish) SHELL_TYPE="fish"; SHELL_RC="$HOME/.config/fish/config.fish" ;;
-    *)      SHELL_TYPE="bash"; SHELL_RC="$HOME/.bashrc" ;;
+    */zsh)        SHELL_TYPE="zsh";  SHELL_RC="$HOME/.zshrc" ;;
+    */fish)       SHELL_TYPE="fish"; SHELL_RC="$HOME/.config/fish/config.fish" ;;
+    */csh|*/tcsh) SHELL_TYPE="csh";  SHELL_RC="$HOME/.cshrc" ;;
+    *)            SHELL_TYPE="bash"; SHELL_RC="$HOME/.bashrc" ;;
   esac
 
   # Init system
@@ -288,6 +295,21 @@ config_backup() {
   fi
 }
 
+# Atomic config write — takes a Node.js script that modifies `config` object.
+# Writes to a temp file then renames, preventing partial writes from race conditions.
+config_write() {
+  local node_script="$1"
+  OC_FILE="$OPENCLAW_CONFIG" node -e '
+    const fs = require("fs"), path = require("path");
+    const f = process.env.OC_FILE;
+    const config = JSON.parse(fs.readFileSync(f, "utf8"));
+    '"$node_script"'
+    const tmp = f + ".tmp." + process.pid;
+    fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
+    fs.renameSync(tmp, f);
+  '
+}
+
 retry() {
   local max="$1" delay="$2"; shift 2
   local attempt=1
@@ -306,21 +328,33 @@ write_token_to_rc() {
   local safe_token="${token//\'/\'\\\'\'}"
   mkdir -p "$(dirname "$SHELL_RC")"
 
-  if [[ "$SHELL_TYPE" == "fish" ]]; then
-    local fish_line="set -gx OPENCLAW_GATEWAY_TOKEN '${safe_token}'"
-    if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
-      sed_inplace "s|set -gx OPENCLAW_GATEWAY_TOKEN.*|${fish_line}|" "$SHELL_RC"
-    else
-      { echo ""; echo "# OpenClaw Gateway Token"; echo "$fish_line"; } >> "$SHELL_RC"
-    fi
-  else
-    local bash_line="export OPENCLAW_GATEWAY_TOKEN='${safe_token}'"
-    if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
-      sed_inplace "s|export OPENCLAW_GATEWAY_TOKEN=.*|${bash_line}|" "$SHELL_RC"
-    else
-      { echo ""; echo "# OpenClaw Gateway Token"; echo "$bash_line"; } >> "$SHELL_RC"
-    fi
-  fi
+  local rc_line=""
+  case "$SHELL_TYPE" in
+    fish)
+      rc_line="set -gx OPENCLAW_GATEWAY_TOKEN '${safe_token}'"
+      if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
+        sed_inplace "s|set -gx OPENCLAW_GATEWAY_TOKEN.*|${rc_line}|" "$SHELL_RC"
+      else
+        { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
+      fi
+      ;;
+    csh)
+      rc_line="setenv OPENCLAW_GATEWAY_TOKEN '${safe_token}'"
+      if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
+        sed_inplace "s|setenv OPENCLAW_GATEWAY_TOKEN.*|${rc_line}|" "$SHELL_RC"
+      else
+        { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
+      fi
+      ;;
+    *)
+      rc_line="export OPENCLAW_GATEWAY_TOKEN='${safe_token}'"
+      if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
+        sed_inplace "s|export OPENCLAW_GATEWAY_TOKEN=.*|${rc_line}|" "$SHELL_RC"
+      else
+        { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
+      fi
+      ;;
+  esac
 }
 
 # ── Error handler ────────────────────────────────────────────────────
@@ -557,7 +591,13 @@ phase3_install() {
       if [[ -n "$latest" && "$latest" != "$current_ver" ]]; then
         info "New version available: ${latest} (current: ${current_ver})"
         if confirm "Upgrade to ${latest}?"; then
-          npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | tail -3
+          local npm_pfx
+          npm_pfx=$(npm prefix -g 2>/dev/null || echo "")
+          if [[ -n "$npm_pfx" && ! -w "$npm_pfx" ]]; then
+            need_sudo npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | tail -3
+          else
+            npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | tail -3
+          fi
           ok "Upgraded to $(openclaw --version 2>/dev/null)"
         fi
       else
@@ -566,11 +606,20 @@ phase3_install() {
     fi
   else
     info "Installing ${OPENCLAW_PKG} globally via npm..."
-    npm install -g "$OPENCLAW_PKG" 2>&1 | tail -5
+    # Check if npm global directory is writable (system Node.js may need sudo)
+    local npm_prefix
+    npm_prefix=$(npm prefix -g 2>/dev/null || echo "")
+    if [[ -n "$npm_prefix" && ! -w "$npm_prefix" ]]; then
+      warn "npm global directory (${npm_prefix}) is not writable"
+      info "Installing with elevated privileges..."
+      need_sudo npm install -g "$OPENCLAW_PKG" 2>&1 | tail -5
+    else
+      npm install -g "$OPENCLAW_PKG" 2>&1 | tail -5
+    fi
     if command -v openclaw &>/dev/null; then
       ok "OpenClaw $(openclaw --version 2>/dev/null) installed"
     else
-      fail "Installation failed. Try: npm install -g ${OPENCLAW_PKG}"
+      fail "Installation failed. Try: sudo npm install -g ${OPENCLAW_PKG}"
     fi
   fi
 
@@ -683,10 +732,7 @@ CONF
   if [[ "$NEED_TOKEN_FIX" == "true" ]]; then
     config_backup
 
-    GATEWAY_TOKEN="$GATEWAY_TOKEN" OC_FILE="$OPENCLAW_CONFIG" node -e '
-      const fs = require("fs");
-      const f = process.env.OC_FILE;
-      const config = JSON.parse(fs.readFileSync(f, "utf8"));
+    GATEWAY_TOKEN="$GATEWAY_TOKEN" config_write '
       if (!config.gateway) config.gateway = {};
       config.gateway.mode = "local";
       if (!config.gateway.auth) config.gateway.auth = {};
@@ -694,7 +740,6 @@ CONF
       config.gateway.auth.token = process.env.GATEWAY_TOKEN;
       if (!config.gateway.remote) config.gateway.remote = {};
       config.gateway.remote.token = process.env.GATEWAY_TOKEN;
-      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
     '
 
     ok "Gateway token: set"
@@ -850,12 +895,7 @@ setup_channel_feishu() {
     FEISHU_APP_ID="$app_id" \
     FEISHU_APP_SECRET="$app_secret" \
     FEISHU_DOMAIN="$domain" \
-    OC_FILE="$OPENCLAW_CONFIG" \
-    node -e '
-      const fs = require("fs");
-      const f = process.env.OC_FILE;
-      const config = JSON.parse(fs.readFileSync(f, "utf8"));
-
+    config_write '
       if (!config.channels) config.channels = {};
       config.channels.feishu = {
         enabled: true,
@@ -865,14 +905,11 @@ setup_channel_feishu() {
         domain: process.env.FEISHU_DOMAIN,
         groupPolicy: "open"
       };
-
       if (!config.plugins) config.plugins = {};
       if (!config.plugins.allow) config.plugins.allow = [];
       if (!config.plugins.allow.includes("feishu")) config.plugins.allow.push("feishu");
       if (!config.plugins.entries) config.plugins.entries = {};
       config.plugins.entries.feishu = { enabled: true };
-
-      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
     '
 
     ok "Feishu config written"
@@ -979,12 +1016,7 @@ setup_channel_telegram() {
     # Write config
     config_backup
     TG_BOT_TOKEN="$bot_token" \
-    OC_FILE="$OPENCLAW_CONFIG" \
-    node -e '
-      const fs = require("fs");
-      const f = process.env.OC_FILE;
-      const config = JSON.parse(fs.readFileSync(f, "utf8"));
-
+    config_write '
       if (!config.channels) config.channels = {};
       config.channels.telegram = {
         ...config.channels.telegram,
@@ -992,14 +1024,11 @@ setup_channel_telegram() {
         botToken: process.env.TG_BOT_TOKEN,
         groupPolicy: "open"
       };
-
       if (!config.plugins) config.plugins = {};
       if (!config.plugins.allow) config.plugins.allow = [];
       if (!config.plugins.allow.includes("telegram")) config.plugins.allow.push("telegram");
       if (!config.plugins.entries) config.plugins.entries = {};
       config.plugins.entries.telegram = { enabled: true };
-
-      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
     '
 
     ok "Telegram config written"
@@ -1091,12 +1120,7 @@ setup_channel_slack() {
     config_backup
     SLACK_BOT_TOKEN="$bot_token" \
     SLACK_APP_TOKEN="$app_token" \
-    OC_FILE="$OPENCLAW_CONFIG" \
-    node -e '
-      const fs = require("fs");
-      const f = process.env.OC_FILE;
-      const config = JSON.parse(fs.readFileSync(f, "utf8"));
-
+    config_write '
       if (!config.channels) config.channels = {};
       config.channels.slack = {
         ...config.channels.slack,
@@ -1106,14 +1130,11 @@ setup_channel_slack() {
         appToken: process.env.SLACK_APP_TOKEN,
         groupPolicy: "open"
       };
-
       if (!config.plugins) config.plugins = {};
       if (!config.plugins.allow) config.plugins.allow = [];
       if (!config.plugins.allow.includes("slack")) config.plugins.allow.push("slack");
       if (!config.plugins.entries) config.plugins.entries = {};
       config.plugins.entries.slack = { enabled: true };
-
-      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
     '
 
     ok "Slack config written"
@@ -1186,12 +1207,7 @@ setup_channel_discord() {
     # Write config
     config_backup
     DISCORD_TOKEN="$bot_token" \
-    OC_FILE="$OPENCLAW_CONFIG" \
-    node -e '
-      const fs = require("fs");
-      const f = process.env.OC_FILE;
-      const config = JSON.parse(fs.readFileSync(f, "utf8"));
-
+    config_write '
       if (!config.channels) config.channels = {};
       config.channels.discord = {
         ...config.channels.discord,
@@ -1199,14 +1215,11 @@ setup_channel_discord() {
         token: process.env.DISCORD_TOKEN,
         groupPolicy: "open"
       };
-
       if (!config.plugins) config.plugins = {};
       if (!config.plugins.allow) config.plugins.allow = [];
       if (!config.plugins.allow.includes("discord")) config.plugins.allow.push("discord");
       if (!config.plugins.entries) config.plugins.entries = {};
       config.plugins.entries.discord = { enabled: true };
-
-      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
     '
 
     ok "Discord config written"
@@ -1290,10 +1303,7 @@ phase7_security() {
   local deny_commands
   deny_commands=$(config_read "gateway.nodes.denyCommands")
   if [[ -n "$deny_commands" ]]; then
-    OC_FILE="$OPENCLAW_CONFIG" node -e '
-      const fs = require("fs");
-      const f = process.env.OC_FILE;
-      const config = JSON.parse(fs.readFileSync(f, "utf8"));
+    config_write '
       if (config.gateway?.nodes?.denyCommands) {
         const valid = [
           "system.run", "system.eval",
@@ -1306,7 +1316,6 @@ phase7_security() {
           ? cleaned
           : ["system.run", "system.eval"];
       }
-      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
     ' 2>/dev/null && { ok "denyCommands: cleaned up invalid entries"; fixes=$((fixes + 1)); } || true
   fi
 
@@ -1314,14 +1323,10 @@ phase7_security() {
   local ws_only
   ws_only=$(config_read "tools.fs.workspaceOnly")
   if [[ "$ws_only" != "true" ]]; then
-    OC_FILE="$OPENCLAW_CONFIG" node -e '
-      const fs = require("fs");
-      const f = process.env.OC_FILE;
-      const config = JSON.parse(fs.readFileSync(f, "utf8"));
+    config_write '
       if (!config.tools) config.tools = {};
       if (!config.tools.fs) config.tools.fs = {};
       config.tools.fs.workspaceOnly = true;
-      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
     ' 2>/dev/null && { ok "tools.fs.workspaceOnly: enabled"; fixes=$((fixes + 1)); } || true
   fi
 
@@ -1330,15 +1335,11 @@ phase7_security() {
   mem_enabled=$(config_read "agents.defaults.memorySearch.enabled")
   if [[ "$mem_enabled" != "false" ]]; then
     if [[ -z "${OPENAI_API_KEY:-}" && -z "${GEMINI_API_KEY:-}" && -z "${VOYAGE_API_KEY:-}" ]]; then
-      OC_FILE="$OPENCLAW_CONFIG" node -e '
-        const fs = require("fs");
-        const f = process.env.OC_FILE;
-        const config = JSON.parse(fs.readFileSync(f, "utf8"));
+      config_write '
         if (!config.agents) config.agents = {};
         if (!config.agents.defaults) config.agents.defaults = {};
         if (!config.agents.defaults.memorySearch) config.agents.defaults.memorySearch = {};
         config.agents.defaults.memorySearch.enabled = false;
-        fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
       ' 2>/dev/null && {
         ok "memorySearch: disabled (no embedding provider found)"
         info "To enable: set OPENAI_API_KEY or configure an embedding provider"
@@ -1573,7 +1574,7 @@ do_uninstall() {
   # ── 4. Shell RC cleanup ──
   info "Cleaning shell RC files..."
   local cleaned=false
-  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.config/fish/config.fish"; do
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.cshrc" "$HOME/.config/fish/config.fish"; do
     if [[ -f "$rc_file" ]] && grep -q "OPENCLAW_GATEWAY_TOKEN" "$rc_file" 2>/dev/null; then
       # Remove the token line and the comment above it
       if [[ "$OS" == "darwin" ]]; then
@@ -1591,7 +1592,26 @@ do_uninstall() {
     ok "No token entries found in shell RC files"
   fi
 
-  # ── 5. Temp files ──
+  # ── 5. Remove install9 command ──
+  if [[ -f "$INSTALL9_BIN" ]]; then
+    rm -f "$INSTALL9_BIN"
+    ok "Removed: ${INSTALL9_BIN}"
+  fi
+  # Clean install9 PATH entries from shell RCs
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.config/fish/config.fish"; do
+    if [[ -f "$rc_file" ]] && grep -q "# install9 command" "$rc_file" 2>/dev/null; then
+      if [[ "$OS" == "darwin" ]]; then
+        sed -i '' '/# install9 command/d' "$rc_file"
+        sed -i '' '/\.local\/bin/d' "$rc_file"
+      else
+        sed -i '/# install9 command/d' "$rc_file"
+        sed -i '/\.local\/bin/d' "$rc_file"
+      fi
+      ok "Cleaned install9 PATH from: ${rc_file}"
+    fi
+  done
+
+  # ── 6. Temp files ──
   if [[ -d "/tmp/openclaw" ]]; then
     rm -rf "/tmp/openclaw"
     ok "Cleaned /tmp/openclaw"
@@ -1610,6 +1630,97 @@ do_uninstall() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
+#  Self-install: register as local command
+# ══════════════════════════════════════════════════════════════════════
+self_install() {
+  local bin_dir
+  bin_dir="$(dirname "$INSTALL9_BIN")"
+
+  # Determine the source: running script itself
+  local script_source=""
+  if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+    script_source="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  fi
+
+  # Skip if already installed and up to date
+  if [[ -f "$INSTALL9_BIN" ]]; then
+    if [[ -n "$script_source" && "$script_source" -ef "$INSTALL9_BIN" ]]; then
+      return  # Already running from installed location
+    fi
+    # Check if installed version matches
+    local installed_ver
+    installed_ver=$(grep '^INSTALLER_VERSION=' "$INSTALL9_BIN" 2>/dev/null | head -1 | cut -d'"' -f2)
+    if [[ "$installed_ver" == "$INSTALLER_VERSION" ]]; then
+      return  # Same version already installed
+    fi
+  fi
+
+  mkdir -p "$bin_dir"
+
+  if [[ -n "$script_source" && -f "$script_source" ]]; then
+    cp "$script_source" "$INSTALL9_BIN"
+  else
+    # Piped via curl — download a clean copy
+    curl -fsSL "$INSTALL9_URL" -o "$INSTALL9_BIN"
+  fi
+  chmod +x "$INSTALL9_BIN"
+
+  # Ensure ~/.local/bin is in PATH
+  if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
+    local path_line=""
+    if [[ "$SHELL_TYPE" == "fish" ]]; then
+      path_line="fish_add_path $bin_dir"
+    else
+      path_line="export PATH=\"$bin_dir:\$PATH\""
+    fi
+
+    if ! grep -q "$bin_dir" "$SHELL_RC" 2>/dev/null; then
+      { echo ""; echo "# install9 command"; echo "$path_line"; } >> "$SHELL_RC"
+    fi
+    export PATH="$bin_dir:$PATH"
+  fi
+
+  ok "install9 command installed: ${INSTALL9_BIN}"
+  info "Run ${BOLD}install9 --help${NC} from any terminal"
+}
+
+do_self_update() {
+  banner
+  info "Updating install9..."
+
+  local tmp_script
+  tmp_script=$(mktemp)
+
+  if curl -fsSL "$INSTALL9_URL" -o "$tmp_script"; then
+    local remote_ver
+    remote_ver=$(grep '^INSTALLER_VERSION=' "$tmp_script" 2>/dev/null | head -1 | cut -d'"' -f2)
+
+    if [[ -z "$remote_ver" ]]; then
+      rm -f "$tmp_script"
+      fail "Downloaded file does not look like a valid installer"
+    fi
+
+    if [[ "$remote_ver" == "$INSTALLER_VERSION" ]]; then
+      rm -f "$tmp_script"
+      ok "Already on latest version ($INSTALLER_VERSION)"
+      exit 0
+    fi
+
+    local bin_dir
+    bin_dir="$(dirname "$INSTALL9_BIN")"
+    mkdir -p "$bin_dir"
+    mv "$tmp_script" "$INSTALL9_BIN"
+    chmod +x "$INSTALL9_BIN"
+    ok "Updated: v${INSTALLER_VERSION} → v${remote_ver}"
+    info "Run ${BOLD}install9 --version${NC} to verify"
+  else
+    rm -f "$tmp_script"
+    fail "Failed to download update from ${INSTALL9_URL}"
+  fi
+  exit 0
+}
+
+# ══════════════════════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════════════════════
 main() {
@@ -1620,6 +1731,10 @@ main() {
     exit 0
   fi
 
+  if [[ "$ARG_SELF_UPDATE" == "true" ]]; then
+    do_self_update
+  fi
+
   banner
   phase1_detect
   phase2_deps
@@ -1628,6 +1743,7 @@ main() {
   phase5_gateway
   phase6_channel
   phase7_security
+  self_install
   phase8_summary
 }
 
