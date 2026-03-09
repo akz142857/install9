@@ -5,7 +5,8 @@
       "im:message.p2p_msg:readonly",
       "im:message.group_at_msg:readonly",
       "im:resource",
-      "im:chat.access_event.bot_p2p_chat:read"
+      "im:chat.access_event.bot_p2p_chat:read",
+      "contact:contact.base:readonly"
     ]
   }
 }

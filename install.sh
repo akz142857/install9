@@ -836,17 +836,17 @@ CONF
         # Default model and example hints per provider
         local default_model="" model_hints=""
         case "$provider" in
-          anthropic)         default_model="claude-sonnet-4";       model_hints="claude-opus-4, claude-haiku-4" ;;
-          openai)            default_model="gpt-4o";                model_hints="gpt-4o-mini, o3, o4-mini" ;;
-          openai-codex)      default_model="codex-mini-latest";     model_hints="o4-mini" ;;
-          google)            default_model="gemini-2.5-flash";      model_hints="gemini-2.5-pro, gemini-2.0-flash" ;;
-          openrouter)        default_model="anthropic/claude-sonnet-4"; model_hints="openai/gpt-4o, deepseek/deepseek-chat" ;;
-          xai)               default_model="grok-3";                model_hints="grok-3-mini" ;;
-          mistral)           default_model="mistral-large-latest";  model_hints="codestral-latest, mistral-medium-latest" ;;
-          groq)              default_model="llama-3.3-70b-versatile"; model_hints="llama-3.1-8b-instant, mixtral-8x7b-32768" ;;
-          minimax)           default_model="MiniMax-M2.5";          model_hints="MiniMax-M2.5-highspeed" ;;
-          zai)               default_model="glm-4-plus";            model_hints="glm-4-air, glm-4-flash" ;;
-          ollama)            default_model="llama3.3";              model_hints="qwen2.5-coder:32b, deepseek-r1:32b" ;;
+          anthropic)         default_model="claude-sonnet-4-6";          model_hints="claude-opus-4-6, claude-haiku-4-5" ;;
+          openai)            default_model="gpt-4.1";                   model_hints="gpt-4.1-mini, gpt-4.1-nano, gpt-5.4" ;;
+          openai-codex)      default_model="gpt-5.3-codex";             model_hints="gpt-5.3-codex-spark" ;;
+          google)            default_model="gemini-2.5-flash";          model_hints="gemini-3.1-flash, gemini-2.5-pro" ;;
+          openrouter)        default_model="anthropic/claude-sonnet-4-6"; model_hints="openai/gpt-4.1, deepseek/deepseek-chat" ;;
+          xai)               default_model="grok-4";                    model_hints="grok-4-1-fast-reasoning, grok-3" ;;
+          mistral)           default_model="mistral-large-3-25-12";     model_hints="devstral-2-25-12, mistral-medium-3-1-25-08" ;;
+          groq)              default_model="llama-3.3-70b-versatile";   model_hints="llama-3.1-8b-instant, mixtral-8x7b-32768" ;;
+          minimax)           default_model="MiniMax-M2.5";              model_hints="MiniMax-M2.5-highspeed" ;;
+          zai)               default_model="glm-5";                     model_hints="glm-4.7, glm-4.6" ;;
+          ollama)            default_model="llama4";                     model_hints="llama3.3, qwen2.5-coder:32b" ;;
           openai-compatible) default_model="" ;;
         esac
 
@@ -1197,6 +1197,17 @@ setup_channel_feishu() {
       local open_id=""
 
       while [[ -z "$open_id" ]]; do
+        # Auto-approve any pending pairing requests
+        local pairing_codes
+        pairing_codes=$(openclaw pairing list 2>/dev/null | grep -Eo '[A-Z0-9]{8}' || true)
+        if [[ -n "$pairing_codes" ]]; then
+          while IFS= read -r code; do
+            info "Auto-approving pairing code: ${code}"
+            openclaw pairing approve feishu "$code" --notify 2>/dev/null || true
+          done <<< "$pairing_codes"
+          sleep 2  # wait for session to be created
+        fi
+
         if [[ -f "$sessions_file" ]]; then
           open_id=$(grep -Eo '"ou_[a-zA-Z0-9_]{32,}"' "$sessions_file" 2>/dev/null | head -1 | tr -d '"' || echo "")
         fi

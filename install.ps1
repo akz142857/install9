@@ -710,17 +710,17 @@ function Phase4-Init {
                 # Default model and example hints per provider
                 $defaultModel = ''; $modelHints = ''
                 switch ($provider) {
-                    'anthropic'         { $defaultModel = 'claude-sonnet-4';          $modelHints = 'claude-opus-4, claude-haiku-4' }
-                    'openai'            { $defaultModel = 'gpt-4o';                   $modelHints = 'gpt-4o-mini, o3, o4-mini' }
-                    'openai-codex'      { $defaultModel = 'codex-mini-latest';        $modelHints = 'o4-mini' }
-                    'google'            { $defaultModel = 'gemini-2.5-flash';         $modelHints = 'gemini-2.5-pro, gemini-2.0-flash' }
-                    'openrouter'        { $defaultModel = 'anthropic/claude-sonnet-4'; $modelHints = 'openai/gpt-4o, deepseek/deepseek-chat' }
-                    'xai'               { $defaultModel = 'grok-3';                   $modelHints = 'grok-3-mini' }
-                    'mistral'           { $defaultModel = 'mistral-large-latest';     $modelHints = 'codestral-latest, mistral-medium-latest' }
-                    'groq'              { $defaultModel = 'llama-3.3-70b-versatile';  $modelHints = 'llama-3.1-8b-instant, mixtral-8x7b-32768' }
-                    'minimax'           { $defaultModel = 'MiniMax-M2.5';             $modelHints = 'MiniMax-M2.5-highspeed' }
-                    'zai'               { $defaultModel = 'glm-4-plus';               $modelHints = 'glm-4-air, glm-4-flash' }
-                    'ollama'            { $defaultModel = 'llama3.3';                 $modelHints = 'qwen2.5-coder:32b, deepseek-r1:32b' }
+                    'anthropic'         { $defaultModel = 'claude-sonnet-4-6';          $modelHints = 'claude-opus-4-6, claude-haiku-4-5' }
+                    'openai'            { $defaultModel = 'gpt-4.1';                   $modelHints = 'gpt-4.1-mini, gpt-4.1-nano, gpt-5.4' }
+                    'openai-codex'      { $defaultModel = 'gpt-5.3-codex';             $modelHints = 'gpt-5.3-codex-spark' }
+                    'google'            { $defaultModel = 'gemini-2.5-flash';          $modelHints = 'gemini-3.1-flash, gemini-2.5-pro' }
+                    'openrouter'        { $defaultModel = 'anthropic/claude-sonnet-4-6'; $modelHints = 'openai/gpt-4.1, deepseek/deepseek-chat' }
+                    'xai'               { $defaultModel = 'grok-4';                    $modelHints = 'grok-4-1-fast-reasoning, grok-3' }
+                    'mistral'           { $defaultModel = 'mistral-large-3-25-12';     $modelHints = 'devstral-2-25-12, mistral-medium-3-1-25-08' }
+                    'groq'              { $defaultModel = 'llama-3.3-70b-versatile';   $modelHints = 'llama-3.1-8b-instant, mixtral-8x7b-32768' }
+                    'minimax'           { $defaultModel = 'MiniMax-M2.5';              $modelHints = 'MiniMax-M2.5-highspeed' }
+                    'zai'               { $defaultModel = 'glm-5';                     $modelHints = 'glm-4.7, glm-4.6' }
+                    'ollama'            { $defaultModel = 'llama4';                     $modelHints = 'llama3.3, qwen2.5-coder:32b' }
                     'openai-compatible' { $defaultModel = '' }
                 }
 
@@ -1098,6 +1098,15 @@ function Setup-ChannelFeishu {
             $openId = ""
 
             while (-not $openId) {
+                # Auto-approve any pending pairing requests
+                $pairingOut = & openclaw pairing list 2>&1 | Out-String
+                $pairingCodes = [regex]::Matches($pairingOut, '[A-Z0-9]{8}') | ForEach-Object { $_.Value }
+                foreach ($code in $pairingCodes) {
+                    Info "Auto-approving pairing code: $code"
+                    & openclaw pairing approve feishu $code --notify 2>&1 | Out-Null
+                }
+                if ($pairingCodes) { Start-Sleep -Seconds 2 }
+
                 if (Test-Path $sessionsFile) {
                     $sessContent = Get-Content $sessionsFile -Raw -ErrorAction SilentlyContinue
                     if ($sessContent -match '"(ou_[a-zA-Z0-9_]{32,})"') {
