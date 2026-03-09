@@ -88,12 +88,28 @@ Options:
   --skip-deps                  Skip dependency installation
   -h, --help                   Show this help
   -v, --version                Show installer version
+
+Environment variables (safer than CLI args for secrets):
+  OPENCLAW_FEISHU_APP_ID       Feishu App ID
+  OPENCLAW_FEISHU_APP_SECRET   Feishu App Secret
+  OPENCLAW_TELEGRAM_TOKEN      Telegram Bot Token
+  OPENCLAW_SLACK_BOT_TOKEN     Slack Bot Token
+  OPENCLAW_SLACK_APP_TOKEN     Slack App Token
+  OPENCLAW_DISCORD_TOKEN       Discord Bot Token
 "@
     exit 0
 }
 
 function Parse-Args {
     param([string[]]$Arguments)
+
+    # Support secrets via environment variables (safer than CLI args visible in process list)
+    if ($env:OPENCLAW_FEISHU_APP_ID)     { $script:ArgFeishuAppId = $env:OPENCLAW_FEISHU_APP_ID; Remove-Item env:OPENCLAW_FEISHU_APP_ID -EA SilentlyContinue }
+    if ($env:OPENCLAW_FEISHU_APP_SECRET) { $script:ArgFeishuAppSecret = $env:OPENCLAW_FEISHU_APP_SECRET; Remove-Item env:OPENCLAW_FEISHU_APP_SECRET -EA SilentlyContinue }
+    if ($env:OPENCLAW_TELEGRAM_TOKEN)    { $script:ArgTelegramToken = $env:OPENCLAW_TELEGRAM_TOKEN; Remove-Item env:OPENCLAW_TELEGRAM_TOKEN -EA SilentlyContinue }
+    if ($env:OPENCLAW_SLACK_BOT_TOKEN)   { $script:ArgSlackBotToken = $env:OPENCLAW_SLACK_BOT_TOKEN; Remove-Item env:OPENCLAW_SLACK_BOT_TOKEN -EA SilentlyContinue }
+    if ($env:OPENCLAW_SLACK_APP_TOKEN)   { $script:ArgSlackAppToken = $env:OPENCLAW_SLACK_APP_TOKEN; Remove-Item env:OPENCLAW_SLACK_APP_TOKEN -EA SilentlyContinue }
+    if ($env:OPENCLAW_DISCORD_TOKEN)     { $script:ArgDiscordToken = $env:OPENCLAW_DISCORD_TOKEN; Remove-Item env:OPENCLAW_DISCORD_TOKEN -EA SilentlyContinue }
 
     $i = 0
     while ($i -lt $Arguments.Count) {
@@ -235,7 +251,33 @@ function Config-Read {
 function Config-Backup {
     if (Test-Path $OPENCLAW_CONFIG) {
         $timestamp = Get-Date -Format 'yyyyMMddHHmmss'
-        Copy-Item $OPENCLAW_CONFIG "$OPENCLAW_CONFIG.bak.$timestamp"
+        $bakFile = "$OPENCLAW_CONFIG.bak.$timestamp"
+        Copy-Item $OPENCLAW_CONFIG $bakFile
+        # Restrict backup file permissions
+        try {
+            $acl = Get-Acl $bakFile
+            $acl.SetAccessRuleProtection($true, $false)
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $env:USERNAME, "FullControl", "Allow")
+            $acl.SetAccessRule($rule)
+            Set-Acl $bakFile $acl -ErrorAction SilentlyContinue
+        } catch { }
+        # Keep only the last 5 backups
+        $backups = Get-ChildItem "$OPENCLAW_CONFIG.bak.*" -ErrorAction SilentlyContinue | Sort-Object Name
+        if ($backups.Count -gt 5) {
+            $backups | Select-Object -First ($backups.Count - 5) | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Harden-ConfigPermissions {
+    if (Test-Path $OPENCLAW_CONFIG) {
+        $acl = Get-Acl $OPENCLAW_CONFIG
+        $acl.SetAccessRuleProtection($true, $false)
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $env:USERNAME, "FullControl", "Allow")
+        $acl.SetAccessRule($rule)
+        Set-Acl $OPENCLAW_CONFIG $acl -ErrorAction SilentlyContinue
     }
 }
 
@@ -590,6 +632,7 @@ function Phase4-Init {
 }
 '@ | ForEach-Object { [IO.File]::WriteAllText($OPENCLAW_CONFIG, $_, [Text.Encoding]::UTF8) }
             Ok "Minimal config created"
+            Harden-ConfigPermissions
         }
     } else {
         Ok "Config exists: $OPENCLAW_CONFIG"
@@ -643,6 +686,7 @@ function Phase4-Init {
         }
 
         Ok "Gateway token: set"
+        Harden-ConfigPermissions
 
         Write-TokenToProfile $script:GatewayToken
         Ok "Token written to profile and user environment"
@@ -762,7 +806,7 @@ function Setup-ChannelFeishu {
 
     if (-not $skipConfig) {
         Write-Host ""
-        Write-Host "  Feishu App Setup Guide:" -ForegroundColor Cyan
+        Write-Host "  Feishu App Setup Guide (before install):" -ForegroundColor Cyan
         Write-Host "    1. Go to " -NoNewline; Write-Host "https://open.feishu.cn" -ForegroundColor White
         Write-Host "    2. Create an app -> get " -NoNewline; Write-Host "App ID" -ForegroundColor Yellow -NoNewline; Write-Host " and " -NoNewline; Write-Host "App Secret" -ForegroundColor Yellow
         Write-Host "    3. Enable " -NoNewline; Write-Host "bot capability" -ForegroundColor White -NoNewline; Write-Host " (add app capability -> Bot)"
@@ -775,7 +819,11 @@ function Setup-ChannelFeishu {
         Write-Host "       " -NoNewline; Write-Host "Tip: " -ForegroundColor White -NoNewline; Write-Host "Import feishu-scopes.json from the install9 repo" -ForegroundColor Cyan
         Write-Host "       to add all permissions at once." -ForegroundColor DarkGray
         Write-Host "       Need more? Add scopes as needed (e.g. contact, chat members)." -ForegroundColor DarkGray
-        Write-Host "    5. Events: Use " -NoNewline; Write-Host "WebSocket" -ForegroundColor White -NoNewline; Write-Host " mode (Events -> WebSocket)"
+        Write-Host ""
+        Write-Host "  Steps 5-6 will be done after the installer configures the channel:" -ForegroundColor Cyan
+        Write-Host "    5. Events -> Use " -NoNewline; Write-Host "WebSocket" -ForegroundColor White -NoNewline; Write-Host " mode"
+        Write-Host "       Requires OpenClaw running first - the installer will start it," -ForegroundColor DarkGray
+        Write-Host "       then Feishu can detect the connection." -ForegroundColor DarkGray
         Write-Host "    6. Publish the app version (Version Management -> Create Version)"
         Write-Host ""
 
@@ -832,6 +880,7 @@ function Setup-ChannelFeishu {
             Remove-Item env:FEISHU_APP_ID, env:FEISHU_APP_SECRET, env:FEISHU_DOMAIN -ErrorAction SilentlyContinue
         }
         Ok "Feishu config written"
+        Harden-ConfigPermissions
     }
 
     # Restart gateway
@@ -842,6 +891,15 @@ function Setup-ChannelFeishu {
     $statusOut = & openclaw status 2>&1 | Out-String
     if ($statusOut -match 'feishu.*OK') { Ok "Feishu channel: active" }
     else { Warn "Feishu may need a moment to connect. Check: openclaw status" }
+
+    # Post-setup reminder: event subscription and publish
+    Write-Host ""
+    Write-Host "  Next steps in Feishu console:" -ForegroundColor Yellow
+    Write-Host "    1. Go to " -NoNewline; Write-Host "Events" -ForegroundColor White -NoNewline; Write-Host " -> select " -NoNewline; Write-Host "WebSocket" -ForegroundColor White
+    Write-Host "       The connection should now be detected - click " -NoNewline; Write-Host "Save" -ForegroundColor White
+    Write-Host "    2. Go to " -NoNewline; Write-Host "Version Management" -ForegroundColor White -NoNewline; Write-Host " -> " -NoNewline; Write-Host "Create Version" -ForegroundColor White
+    Write-Host "       Publish the app so permissions take effect"
+    Write-Host ""
 
     # Optional test message
     if (-not $script:NonInteractive) {
@@ -932,6 +990,7 @@ function Setup-ChannelTelegram {
             Remove-Item env:TG_BOT_TOKEN -ErrorAction SilentlyContinue
         }
         Ok "Telegram config written"
+        Harden-ConfigPermissions
     }
 
     Info "Restarting gateway to load Telegram plugin..."
@@ -1011,6 +1070,7 @@ function Setup-ChannelSlack {
             Remove-Item env:SLACK_BOT_TOKEN, env:SLACK_APP_TOKEN -ErrorAction SilentlyContinue
         }
         Ok "Slack config written"
+        Harden-ConfigPermissions
     }
 
     Info "Restarting gateway to load Slack plugin..."
@@ -1083,6 +1143,7 @@ function Setup-ChannelDiscord {
             Remove-Item env:DISCORD_TOKEN -ErrorAction SilentlyContinue
         }
         Ok "Discord config written"
+        Harden-ConfigPermissions
     }
 
     Info "Restarting gateway to load Discord plugin..."
@@ -1247,6 +1308,75 @@ function Phase7-Security {
             $sizeMB = [math]::Floor($logSize / 1048576)
             Warn "gateway.log is ${sizeMB}MB - consider truncating"
         }
+    }
+
+    # -- Harden file permissions --
+    if (Test-Path $OPENCLAW_CONFIG_DIR) {
+        try {
+            $acl = Get-Acl $OPENCLAW_CONFIG_DIR
+            $needsFix = -not $acl.AreAccessRulesProtected
+            if (-not $needsFix) {
+                # Check if any rule grants access to someone other than the current user
+                foreach ($rule in $acl.Access) {
+                    if ($rule.IdentityReference.Value -notmatch [regex]::Escape($env:USERNAME) -and
+                        $rule.IdentityReference.Value -ne 'NT AUTHORITY\SYSTEM' -and
+                        $rule.IdentityReference.Value -ne 'BUILTIN\Administrators') {
+                        $needsFix = $true; break
+                    }
+                }
+            }
+            if ($needsFix) {
+                $acl.SetAccessRuleProtection($true, $false)
+                $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    $env:USERNAME, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+                $acl.SetAccessRule($rule)
+                Set-Acl $OPENCLAW_CONFIG_DIR $acl -ErrorAction SilentlyContinue
+                Ok "File permissions: ~/.openclaw restricted to current user"
+                $fixes++
+            }
+        } catch { Warn "Could not set permissions on $OPENCLAW_CONFIG_DIR" }
+    }
+    Harden-ConfigPermissions
+
+    # -- Verify gateway.auth.mode --
+    $authMode = Config-Read "gateway.auth.mode"
+    if ($authMode -and $authMode -ne "token") {
+        $env:OC_FILE = $OPENCLAW_CONFIG
+        try {
+            & node -e '
+                const fs = require("fs");
+                const f = process.env.OC_FILE;
+                const config = JSON.parse(fs.readFileSync(f, "utf8"));
+                if (!config.gateway) config.gateway = {};
+                if (!config.gateway.auth) config.gateway.auth = {};
+                config.gateway.auth.mode = "token";
+                const tmp = f + ".tmp." + process.pid;
+                fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
+                fs.renameSync(tmp, f);
+            ' 2>$null
+            Ok "gateway.auth.mode: set to token"
+            $fixes++
+        } catch { }
+    }
+
+    # -- Verify gateway listens on localhost only --
+    $gwHost = Config-Read "gateway.host"
+    if ($gwHost -and $gwHost -ne "127.0.0.1" -and $gwHost -ne "localhost") {
+        Warn "gateway.host is '$gwHost' — consider restricting to 127.0.0.1"
+    }
+
+    # -- Harden permissions on backup files --
+    Get-ChildItem "$OPENCLAW_CONFIG.bak.*" -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            $acl = Get-Acl $_.FullName
+            if (-not $acl.AreAccessRulesProtected) {
+                $acl.SetAccessRuleProtection($true, $false)
+                $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    $env:USERNAME, "FullControl", "Allow")
+                $acl.SetAccessRule($rule)
+                Set-Acl $_.FullName $acl -ErrorAction SilentlyContinue
+            }
+        } catch { }
     }
 
     if ($fixes -eq 0) { Ok "No issues found" }
@@ -1496,7 +1626,7 @@ function Self-Install {
         Copy-Item $scriptSource $INSTALL9_BIN -Force
     } else {
         # Piped via irm|iex — download a clean copy
-        Invoke-WebRequest -Uri $INSTALL9_URL -OutFile $INSTALL9_BIN -UseBasicParsing
+        Invoke-WebRequest -Uri $INSTALL9_URL -OutFile $INSTALL9_BIN -UseBasicParsing -TimeoutSec 60
     }
 
     # Create a .cmd wrapper so "install9" works from cmd.exe and PowerShell alike
@@ -1522,7 +1652,7 @@ function Do-SelfUpdate {
 
     $tmpFile = Join-Path $env:TEMP "install9-update-$([guid]::NewGuid().ToString('N')).ps1"
     try {
-        Invoke-WebRequest -Uri $INSTALL9_URL -OutFile $tmpFile -UseBasicParsing
+        Invoke-WebRequest -Uri $INSTALL9_URL -OutFile $tmpFile -UseBasicParsing -TimeoutSec 60
     } catch {
         Fail "Failed to download update from $INSTALL9_URL"
     }
@@ -1531,6 +1661,13 @@ function Do-SelfUpdate {
         Select-Object -First 1).Matches.Groups[1].Value
 
     if (-not $remoteVer) {
+        Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+        Fail "Downloaded file does not look like a valid installer"
+    }
+
+    # Basic content validation
+    $content = Get-Content $tmpFile -Raw
+    if ($content.Length -lt 1000 -or $content -notmatch 'function Phase1-Detect' -or $content -notmatch 'function Main') {
         Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
         Fail "Downloaded file does not look like a valid installer"
     }

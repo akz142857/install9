@@ -78,11 +78,39 @@ Options:
   --skip-deps                  Skip dependency installation
   -h, --help                   Show this help
   -v, --version                Show installer version
+
+Environment variables (safer than CLI args for secrets):
+  OPENCLAW_FEISHU_APP_ID       Feishu App ID
+  OPENCLAW_FEISHU_APP_SECRET   Feishu App Secret
+  OPENCLAW_TELEGRAM_TOKEN      Telegram Bot Token
+  OPENCLAW_SLACK_BOT_TOKEN     Slack Bot Token
+  OPENCLAW_SLACK_APP_TOKEN     Slack App Token
+  OPENCLAW_DISCORD_TOKEN       Discord Bot Token
 EOF
   exit 0
 }
 
 parse_args() {
+  # Support secrets via environment variables (safer than CLI args visible in ps)
+  if [[ -n "${OPENCLAW_FEISHU_APP_ID:-}" ]]; then
+    ARG_FEISHU_APP_ID="$OPENCLAW_FEISHU_APP_ID"; unset OPENCLAW_FEISHU_APP_ID
+  fi
+  if [[ -n "${OPENCLAW_FEISHU_APP_SECRET:-}" ]]; then
+    ARG_FEISHU_APP_SECRET="$OPENCLAW_FEISHU_APP_SECRET"; unset OPENCLAW_FEISHU_APP_SECRET
+  fi
+  if [[ -n "${OPENCLAW_TELEGRAM_TOKEN:-}" ]]; then
+    ARG_TELEGRAM_BOT_TOKEN="$OPENCLAW_TELEGRAM_TOKEN"; unset OPENCLAW_TELEGRAM_TOKEN
+  fi
+  if [[ -n "${OPENCLAW_SLACK_BOT_TOKEN:-}" ]]; then
+    ARG_SLACK_BOT_TOKEN="$OPENCLAW_SLACK_BOT_TOKEN"; unset OPENCLAW_SLACK_BOT_TOKEN
+  fi
+  if [[ -n "${OPENCLAW_SLACK_APP_TOKEN:-}" ]]; then
+    ARG_SLACK_APP_TOKEN="$OPENCLAW_SLACK_APP_TOKEN"; unset OPENCLAW_SLACK_APP_TOKEN
+  fi
+  if [[ -n "${OPENCLAW_DISCORD_TOKEN:-}" ]]; then
+    ARG_DISCORD_BOT_TOKEN="$OPENCLAW_DISCORD_TOKEN"; unset OPENCLAW_DISCORD_TOKEN
+  fi
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --non-interactive)   NON_INTERACTIVE=true ;;
@@ -291,8 +319,18 @@ config_read() {
 
 config_backup() {
   if [[ -f "$OPENCLAW_CONFIG" ]]; then
-    cp "$OPENCLAW_CONFIG" "${OPENCLAW_CONFIG}.bak.$(date +%s)"
+    local bak="${OPENCLAW_CONFIG}.bak.$(date +%s)"
+    cp "$OPENCLAW_CONFIG" "$bak"
+    chmod 600 "$bak" 2>/dev/null || true
+    # Keep only the last 5 backups
+    # shellcheck disable=SC2012
+    ls -1t "${OPENCLAW_CONFIG}".bak.* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
   fi
+}
+
+harden_config() {
+  chmod 700 "$OPENCLAW_CONFIG_DIR" 2>/dev/null || true
+  chmod 600 "$OPENCLAW_CONFIG" 2>/dev/null || true
 }
 
 # Atomic config write — takes a Node.js script that modifies `config` object.
@@ -321,40 +359,28 @@ retry() {
   done
 }
 
-# Write token to shell RC with correct syntax per shell type
+# Write token to shell RC with correct syntax per shell type.
+# Uses delete+append instead of sed substitution to avoid metacharacter issues in tokens.
 write_token_to_rc() {
   local token="$1"
   # Escape single quotes in token to prevent shell injection
   local safe_token="${token//\'/\'\\\'\'}"
   mkdir -p "$(dirname "$SHELL_RC")"
 
+  # Remove existing token lines (safe: patterns are fixed strings, not token data)
+  if [[ -f "$SHELL_RC" ]] && grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
+    sed_inplace '/# OpenClaw Gateway Token/d' "$SHELL_RC"
+    sed_inplace '/OPENCLAW_GATEWAY_TOKEN/d' "$SHELL_RC"
+  fi
+
+  # Append new token line
   local rc_line=""
   case "$SHELL_TYPE" in
-    fish)
-      rc_line="set -gx OPENCLAW_GATEWAY_TOKEN '${safe_token}'"
-      if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
-        sed_inplace "s|set -gx OPENCLAW_GATEWAY_TOKEN.*|${rc_line}|" "$SHELL_RC"
-      else
-        { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
-      fi
-      ;;
-    csh)
-      rc_line="setenv OPENCLAW_GATEWAY_TOKEN '${safe_token}'"
-      if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
-        sed_inplace "s|setenv OPENCLAW_GATEWAY_TOKEN.*|${rc_line}|" "$SHELL_RC"
-      else
-        { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
-      fi
-      ;;
-    *)
-      rc_line="export OPENCLAW_GATEWAY_TOKEN='${safe_token}'"
-      if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
-        sed_inplace "s|export OPENCLAW_GATEWAY_TOKEN=.*|${rc_line}|" "$SHELL_RC"
-      else
-        { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
-      fi
-      ;;
+    fish) rc_line="set -gx OPENCLAW_GATEWAY_TOKEN '${safe_token}'" ;;
+    csh)  rc_line="setenv OPENCLAW_GATEWAY_TOKEN '${safe_token}'" ;;
+    *)    rc_line="export OPENCLAW_GATEWAY_TOKEN='${safe_token}'" ;;
   esac
+  { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
 }
 
 # ── Error handler ────────────────────────────────────────────────────
@@ -432,7 +458,7 @@ install_node_via_nvm() {
     info "Installing nvm first..."
     local nvm_script
     nvm_script=$(mktemp)
-    if curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh" -o "$nvm_script"; then
+    if curl -fsSL --connect-timeout 15 --max-time 120 "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh" -o "$nvm_script"; then
       PROFILE=/dev/null bash "$nvm_script" 2>&1 | tail -3
       rm -f "$nvm_script"
     else
@@ -456,7 +482,7 @@ install_node_via_pkg() {
       info "Adding NodeSource repository..."
       local setup_script
       setup_script=$(mktemp)
-      if curl -fsSL "https://deb.nodesource.com/setup_${MIN_NODE_MAJOR}.x" -o "$setup_script"; then
+      if curl -fsSL --connect-timeout 15 --max-time 120 "https://deb.nodesource.com/setup_${MIN_NODE_MAJOR}.x" -o "$setup_script"; then
         need_sudo bash "$setup_script" 2>&1 | tail -3
         rm -f "$setup_script"
         need_sudo apt-get install -y nodejs 2>&1 | tail -1
@@ -468,7 +494,7 @@ install_node_via_pkg() {
     dnf|yum)
       local setup_script
       setup_script=$(mktemp)
-      if curl -fsSL "https://rpm.nodesource.com/setup_${MIN_NODE_MAJOR}.x" -o "$setup_script"; then
+      if curl -fsSL --connect-timeout 15 --max-time 120 "https://rpm.nodesource.com/setup_${MIN_NODE_MAJOR}.x" -o "$setup_script"; then
         need_sudo bash "$setup_script" 2>&1 | tail -3
         rm -f "$setup_script"
         need_sudo "${PKG_MGR}" install -y nodejs 2>&1 | tail -1
@@ -700,11 +726,13 @@ phase4_init() {
   "plugins": { "allow": [], "entries": {}, "installs": {} }
 }
 CONF
+      harden_config
       ok "Minimal config created"
     fi
   else
     ok "Config exists: ${OPENCLAW_CONFIG}"
   fi
+  harden_config
 
   # ── Gateway Token ──
   info "Checking gateway token..."
@@ -742,6 +770,7 @@ CONF
       config.gateway.remote.token = process.env.GATEWAY_TOKEN;
     '
 
+    harden_config
     ok "Gateway token: set"
 
     write_token_to_rc "$GATEWAY_TOKEN"
@@ -845,11 +874,11 @@ setup_channel_feishu() {
 
   if [[ "$skip_config" != "true" ]]; then
     echo ""
-    echo -e "  ${CYAN}Feishu App Setup Guide:${NC}"
+    echo -e "  ${CYAN}Feishu App Setup Guide (before install):${NC}"
     echo -e "    1. Go to ${BOLD}https://open.feishu.cn${NC}"
     echo -e "    2. Create an app → get ${YELLOW}App ID${NC} and ${YELLOW}App Secret${NC}"
-    echo -e "    3. Enable ${BOLD}bot capability${NC} (添加应用能力 → 机器人)"
-    echo -e "    4. Add permissions (权限管理 → API 权限):"
+    echo -e "    3. Enable ${BOLD}bot capability${NC} (Add App Capability > Bot)"
+    echo -e "    4. Add permissions (Permissions > API Permissions):"
     echo -e "       ${DIM}im:message:send_as_bot                 Send messages${NC}"
     echo -e "       ${DIM}im:message.p2p_msg:readonly             Receive DMs${NC}"
     echo -e "       ${DIM}im:message.group_at_msg:readonly        Receive @mentions${NC}"
@@ -858,8 +887,12 @@ setup_channel_feishu() {
     echo -e "       ${BOLD}Tip:${NC} Import ${CYAN}feishu-scopes.json${NC} from the install9 repo"
     echo -e "       ${DIM}to add all permissions at once.${NC}"
     echo -e "       ${DIM}Need more? Add scopes as needed (e.g. contact, chat members).${NC}"
-    echo -e "    5. Events: Use ${BOLD}WebSocket${NC} mode (事件订阅 → WebSocket)"
-    echo -e "    6. Publish the app version (版本管理与发布 → 创建版本)"
+    echo ""
+    echo -e "  ${CYAN}Steps 5–6 will be done after the installer configures the channel:${NC}"
+    echo -e "    5. Events > Use ${BOLD}WebSocket${NC} mode (persistent connection)"
+    echo -e "       ${DIM}Requires OpenClaw running first — the installer will start it,${NC}"
+    echo -e "       ${DIM}then Feishu can detect the connection.${NC}"
+    echo -e "    6. Publish the app version (Version Management > Create Version)"
     echo ""
 
     local app_id app_secret domain
@@ -922,6 +955,7 @@ setup_channel_feishu() {
       config.plugins.entries.feishu = { enabled: true };
     '
 
+    harden_config
     ok "Feishu config written"
   fi
 
@@ -938,6 +972,15 @@ setup_channel_feishu() {
   else
     warn "Feishu may need a moment to connect. Check: openclaw status"
   fi
+
+  # Post-setup reminder: event subscription and publish
+  echo ""
+  echo -e "  ${YELLOW}${BOLD}Next steps in Feishu console:${NC}"
+  echo -e "    1. Go to ${BOLD}Events${NC} > select ${BOLD}WebSocket${NC} (persistent connection)"
+  echo -e "       The connection should now be detected — click ${BOLD}Save${NC}"
+  echo -e "    2. Go to ${BOLD}Version Management${NC} > ${BOLD}Create Version${NC}"
+  echo -e "       Publish the app so permissions take effect"
+  echo ""
 
   # Optional test message
   if [[ "$NON_INTERACTIVE" != "true" ]]; then
@@ -1041,6 +1084,7 @@ setup_channel_telegram() {
       config.plugins.entries.telegram = { enabled: true };
     '
 
+    harden_config
     ok "Telegram config written"
   fi
 
@@ -1147,6 +1191,7 @@ setup_channel_slack() {
       config.plugins.entries.slack = { enabled: true };
     '
 
+    harden_config
     ok "Slack config written"
   fi
 
@@ -1232,6 +1277,7 @@ setup_channel_discord() {
       config.plugins.entries.discord = { enabled: true };
     '
 
+    harden_config
     ok "Discord config written"
   fi
 
@@ -1326,7 +1372,7 @@ phase7_security() {
           ? cleaned
           : ["system.run", "system.eval"];
       }
-    ' 2>/dev/null && { ok "denyCommands: cleaned up invalid entries"; fixes=$((fixes + 1)); } || true
+    ' 2>/dev/null && { harden_config; ok "denyCommands: cleaned up invalid entries"; fixes=$((fixes + 1)); } || true
   fi
 
   # ── Set workspaceOnly for filesystem safety ──
@@ -1337,7 +1383,7 @@ phase7_security() {
       if (!config.tools) config.tools = {};
       if (!config.tools.fs) config.tools.fs = {};
       config.tools.fs.workspaceOnly = true;
-    ' 2>/dev/null && { ok "tools.fs.workspaceOnly: enabled"; fixes=$((fixes + 1)); } || true
+    ' 2>/dev/null && { harden_config; ok "tools.fs.workspaceOnly: enabled"; fixes=$((fixes + 1)); } || true
   fi
 
   # ── Disable memory search if no embedding provider ──
@@ -1351,6 +1397,7 @@ phase7_security() {
         if (!config.agents.defaults.memorySearch) config.agents.defaults.memorySearch = {};
         config.agents.defaults.memorySearch.enabled = false;
       ' 2>/dev/null && {
+        harden_config
         ok "memorySearch: disabled (no embedding provider found)"
         info "To enable: set OPENAI_API_KEY or configure an embedding provider"
         fixes=$((fixes + 1))
@@ -1363,8 +1410,8 @@ phase7_security() {
   local sessions_json="${sessions_dir}/sessions.json"
   if [[ -d "$sessions_dir" && -f "$sessions_json" ]]; then
     local orphans=0
-    local _old_nullglob
-    _old_nullglob=$(shopt -p nullglob 2>/dev/null || true)
+    local _nullglob_was_set=false
+    shopt -q nullglob && _nullglob_was_set=true
     shopt -s nullglob
     for f in "${sessions_dir}"/*.jsonl; do
       local session_id
@@ -1375,8 +1422,7 @@ phase7_security() {
         orphans=$((orphans + 1))
       fi
     done
-    # Safe eval: $_old_nullglob is output of `shopt -p nullglob` (deterministic shell builtin)
-    eval "$_old_nullglob"
+    if [[ "$_nullglob_was_set" != "true" ]]; then shopt -u nullglob; fi
     if [[ $orphans -gt 0 ]]; then
       ok "Cleaned ${orphans} orphan session file(s)"
       fixes=$((fixes + 1))
@@ -1391,6 +1437,55 @@ phase7_security() {
       warn "gateway.log is $(( log_size / 1048576 ))MB — consider: > ~/.openclaw/logs/gateway.log"
     fi
   fi
+
+  # ── Harden file permissions ──
+  if [[ -d "$OPENCLAW_CONFIG_DIR" ]]; then
+    local perms_fixed=false
+    local dir_perms
+    dir_perms=$(stat -c '%a' "$OPENCLAW_CONFIG_DIR" 2>/dev/null || stat -f '%Lp' "$OPENCLAW_CONFIG_DIR" 2>/dev/null || echo "")
+    if [[ -n "$dir_perms" && "$dir_perms" != "700" ]]; then
+      chmod 700 "$OPENCLAW_CONFIG_DIR" 2>/dev/null && perms_fixed=true
+    fi
+    if [[ -f "$OPENCLAW_CONFIG" ]]; then
+      local file_perms
+      file_perms=$(stat -c '%a' "$OPENCLAW_CONFIG" 2>/dev/null || stat -f '%Lp' "$OPENCLAW_CONFIG" 2>/dev/null || echo "")
+      if [[ -n "$file_perms" && "$file_perms" != "600" ]]; then
+        chmod 600 "$OPENCLAW_CONFIG" 2>/dev/null && perms_fixed=true
+      fi
+    fi
+    if [[ "$perms_fixed" == "true" ]]; then
+      ok "File permissions: hardened (~/.openclaw 700, config 600)"
+      fixes=$((fixes + 1))
+    fi
+  fi
+
+  # ── Verify gateway.auth.mode is "token" ──
+  local auth_mode
+  auth_mode=$(config_read "gateway.auth.mode")
+  if [[ -n "$auth_mode" && "$auth_mode" != "token" ]]; then
+    config_write '
+      if (!config.gateway) config.gateway = {};
+      if (!config.gateway.auth) config.gateway.auth = {};
+      config.gateway.auth.mode = "token";
+    ' 2>/dev/null && {
+      harden_config
+      ok "gateway.auth.mode: set to token (was: ${auth_mode})"
+      fixes=$((fixes + 1))
+    } || true
+  fi
+
+  # ── Verify gateway listens on localhost only ──
+  local gw_host
+  gw_host=$(config_read "gateway.host")
+  if [[ -n "$gw_host" && "$gw_host" != "127.0.0.1" && "$gw_host" != "localhost" ]]; then
+    warn "gateway.host is '${gw_host}' — consider restricting to 127.0.0.1"
+  fi
+
+  # ── Harden permissions on backup files ──
+  # shellcheck disable=SC2012
+  for bak_file in $(ls -1 "${OPENCLAW_CONFIG}".bak.* 2>/dev/null); do
+    chmod 600 "$bak_file" 2>/dev/null || true
+  done
 
   if [[ $fixes -eq 0 ]]; then
     ok "No issues found"
@@ -1607,16 +1702,13 @@ do_uninstall() {
     rm -f "$INSTALL9_BIN"
     ok "Removed: ${INSTALL9_BIN}"
   fi
-  # Clean install9 PATH entries from shell RCs
+  # Clean install9 PATH entries from shell RCs (match exact install9 lines only)
   for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.config/fish/config.fish"; do
     if [[ -f "$rc_file" ]] && grep -q "# install9 command" "$rc_file" 2>/dev/null; then
-      if [[ "$OS" == "darwin" ]]; then
-        sed -i '' '/# install9 command/d' "$rc_file"
-        sed -i '' '/\.local\/bin/d' "$rc_file"
-      else
-        sed -i '/# install9 command/d' "$rc_file"
-        sed -i '/\.local\/bin/d' "$rc_file"
-      fi
+      sed_inplace '/# install9 command/d' "$rc_file"
+      # Only remove .local/bin PATH lines added by install9 (match the exact export pattern)
+      sed_inplace '/export PATH=.*\.local\/bin.*\$PATH/d' "$rc_file"
+      sed_inplace '/fish_add_path.*\.local\/bin/d' "$rc_file"
       ok "Cleaned install9 PATH from: ${rc_file}"
     fi
   done
@@ -1671,7 +1763,7 @@ self_install() {
     cp "$script_source" "$INSTALL9_BIN"
   else
     # Piped via curl — download a clean copy
-    curl -fsSL "$INSTALL9_URL" -o "$INSTALL9_BIN"
+    curl -fsSL --connect-timeout 15 --max-time 60 "$INSTALL9_URL" -o "$INSTALL9_BIN"
   fi
   chmod +x "$INSTALL9_BIN"
 
@@ -1701,13 +1793,21 @@ do_self_update() {
   local tmp_script
   tmp_script=$(mktemp)
 
-  if curl -fsSL "$INSTALL9_URL" -o "$tmp_script"; then
+  if curl -fsSL --connect-timeout 15 --max-time 60 "$INSTALL9_URL" -o "$tmp_script"; then
     local remote_ver
     remote_ver=$(grep '^INSTALLER_VERSION=' "$tmp_script" 2>/dev/null | head -1 | cut -d'"' -f2)
 
     if [[ -z "$remote_ver" ]]; then
       rm -f "$tmp_script"
       fail "Downloaded file does not look like a valid installer"
+    fi
+
+    # Basic content validation
+    local file_size
+    file_size=$(wc -c < "$tmp_script" | tr -d ' ')
+    if [[ "$file_size" -lt 1000 ]] || ! grep -q "phase1_detect" "$tmp_script" || ! grep -q "^main()" "$tmp_script"; then
+      rm -f "$tmp_script"
+      fail "Downloaded file failed integrity check"
     fi
 
     if [[ "$remote_ver" == "$INSTALLER_VERSION" ]]; then
