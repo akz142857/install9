@@ -706,210 +706,38 @@ function Phase4-Init {
             }
 
             if ($provider) {
-                # Interactive model selection per provider
+                # Default model and example hints per provider
+                $defaultModel = ''; $modelHints = ''
+                switch ($provider) {
+                    'anthropic'         { $defaultModel = 'claude-sonnet-4';          $modelHints = 'claude-opus-4, claude-haiku-4' }
+                    'openai'            { $defaultModel = 'gpt-4o';                   $modelHints = 'gpt-4o-mini, o3, o4-mini' }
+                    'openai-codex'      { $defaultModel = 'codex-mini-latest';        $modelHints = 'o4-mini' }
+                    'google'            { $defaultModel = 'gemini-2.5-flash';         $modelHints = 'gemini-2.5-pro, gemini-2.0-flash' }
+                    'openrouter'        { $defaultModel = 'anthropic/claude-sonnet-4'; $modelHints = 'openai/gpt-4o, deepseek/deepseek-chat' }
+                    'xai'               { $defaultModel = 'grok-3';                   $modelHints = 'grok-3-mini' }
+                    'mistral'           { $defaultModel = 'mistral-large-latest';     $modelHints = 'codestral-latest, mistral-medium-latest' }
+                    'groq'              { $defaultModel = 'llama-3.3-70b-versatile';  $modelHints = 'llama-3.1-8b-instant, mixtral-8x7b-32768' }
+                    'minimax'           { $defaultModel = 'MiniMax-M2.5';             $modelHints = 'MiniMax-M2.5-highspeed' }
+                    'zai'               { $defaultModel = 'glm-4-plus';               $modelHints = 'glm-4-air, glm-4-flash' }
+                    'ollama'            { $defaultModel = 'llama3.3';                 $modelHints = 'qwen2.5-coder:32b, deepseek-r1:32b' }
+                    'openai-compatible' { $defaultModel = '' }
+                }
+
+                # Prompt for model name (or use CLI arg / fallback default)
                 $modelName = $script:ArgModelName
-                if (-not $modelName -and -not $script:NonInteractive) {
-                    Write-Host ""
-                    switch ($provider) {
-                        'anthropic' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "claude-sonnet-4-20250514" -ForegroundColor White -NoNewline; Write-Host "    - Sonnet 4 (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "claude-opus-4-20250514" -ForegroundColor White -NoNewline; Write-Host "      - Opus 4 (most capable)"
-                            Write-Host "    3) " -NoNewline; Write-Host "claude-haiku-4-20250414" -ForegroundColor White -NoNewline; Write-Host "     - Haiku 4 (fastest)"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'claude-sonnet-4-20250514' }
-                                '2' { 'claude-opus-4-20250514' }
-                                '3' { 'claude-haiku-4-20250414' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'claude-sonnet-4-20250514' }
-                            }
-                        }
-                        'openai' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "gpt-4o" -ForegroundColor White -NoNewline; Write-Host "                      - GPT-4o (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "gpt-4o-mini" -ForegroundColor White -NoNewline; Write-Host "                 - GPT-4o Mini (fast)"
-                            Write-Host "    3) " -NoNewline; Write-Host "o3" -ForegroundColor White -NoNewline; Write-Host "                          - o3 (reasoning)"
-                            Write-Host "    4) " -NoNewline; Write-Host "o4-mini" -ForegroundColor White -NoNewline; Write-Host "                     - o4-mini (reasoning, fast)"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'gpt-4o' }
-                                '2' { 'gpt-4o-mini' }
-                                '3' { 'o3' }
-                                '4' { 'o4-mini' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'gpt-4o' }
-                            }
-                        }
-                        'openai-codex' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "codex-mini-latest" -ForegroundColor White -NoNewline; Write-Host "           - Codex Mini (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "o4-mini" -ForegroundColor White -NoNewline; Write-Host "                     - o4-mini"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'codex-mini-latest' }
-                                '2' { 'o4-mini' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'codex-mini-latest' }
-                            }
-                        }
-                        'google' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "gemini-2.5-flash" -ForegroundColor White -NoNewline; Write-Host "            - 2.5 Flash (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "gemini-2.5-pro" -ForegroundColor White -NoNewline; Write-Host "              - 2.5 Pro (most capable)"
-                            Write-Host "    3) " -NoNewline; Write-Host "gemini-2.0-flash" -ForegroundColor White -NoNewline; Write-Host "            - 2.0 Flash (fast)"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'gemini-2.5-flash' }
-                                '2' { 'gemini-2.5-pro' }
-                                '3' { 'gemini-2.0-flash' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'gemini-2.5-flash' }
-                            }
-                        }
-                        'openrouter' {
-                            Write-Host "  Select model (or enter any OpenRouter model slug):"
-                            Write-Host "    1) " -NoNewline; Write-Host "anthropic/claude-sonnet-4" -ForegroundColor White -NoNewline; Write-Host "   - Claude Sonnet 4"
-                            Write-Host "    2) " -NoNewline; Write-Host "openai/gpt-4o" -ForegroundColor White -NoNewline; Write-Host "              - GPT-4o"
-                            Write-Host "    3) " -NoNewline; Write-Host "google/gemini-2.5-flash" -ForegroundColor White -NoNewline; Write-Host "    - Gemini 2.5 Flash"
-                            Write-Host "    4) " -NoNewline; Write-Host "deepseek/deepseek-chat" -ForegroundColor White -NoNewline; Write-Host "     - DeepSeek V3"
-                            Write-Host "    5) " -NoNewline; Write-Host "deepseek/deepseek-r1" -ForegroundColor White -NoNewline; Write-Host "       - DeepSeek R1"
-                            Write-Host "    c) Custom model slug"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'anthropic/claude-sonnet-4' }
-                                '2' { 'openai/gpt-4o' }
-                                '3' { 'google/gemini-2.5-flash' }
-                                '4' { 'deepseek/deepseek-chat' }
-                                '5' { 'deepseek/deepseek-r1' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model slug" }
-                                default { 'anthropic/claude-sonnet-4' }
-                            }
-                        }
-                        'xai' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "grok-3" -ForegroundColor White -NoNewline; Write-Host "                      - Grok 3 (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "grok-3-mini" -ForegroundColor White -NoNewline; Write-Host "                 - Grok 3 Mini (fast)"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'grok-3' }
-                                '2' { 'grok-3-mini' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'grok-3' }
-                            }
-                        }
-                        'mistral' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "mistral-large-latest" -ForegroundColor White -NoNewline; Write-Host "        - Mistral Large (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "mistral-medium-latest" -ForegroundColor White -NoNewline; Write-Host "       - Mistral Medium"
-                            Write-Host "    3) " -NoNewline; Write-Host "codestral-latest" -ForegroundColor White -NoNewline; Write-Host "            - Codestral (code)"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'mistral-large-latest' }
-                                '2' { 'mistral-medium-latest' }
-                                '3' { 'codestral-latest' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'mistral-large-latest' }
-                            }
-                        }
-                        'groq' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "llama-3.3-70b-versatile" -ForegroundColor White -NoNewline; Write-Host "     - Llama 3.3 70B (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "llama-3.1-8b-instant" -ForegroundColor White -NoNewline; Write-Host "        - Llama 3.1 8B (fastest)"
-                            Write-Host "    3) " -NoNewline; Write-Host "mixtral-8x7b-32768" -ForegroundColor White -NoNewline; Write-Host "          - Mixtral 8x7B"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'llama-3.3-70b-versatile' }
-                                '2' { 'llama-3.1-8b-instant' }
-                                '3' { 'mixtral-8x7b-32768' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'llama-3.3-70b-versatile' }
-                            }
-                        }
-                        'minimax' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "MiniMax-M2.5" -ForegroundColor White -NoNewline; Write-Host "                - M2.5 (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "MiniMax-M2.5-highspeed" -ForegroundColor White -NoNewline; Write-Host "      - M2.5 Highspeed (faster)"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'MiniMax-M2.5' }
-                                '2' { 'MiniMax-M2.5-highspeed' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'MiniMax-M2.5' }
-                            }
-                        }
-                        'zai' {
-                            Write-Host "  Select model:"
-                            Write-Host "    1) " -NoNewline; Write-Host "glm-4-plus" -ForegroundColor White -NoNewline; Write-Host "                  - GLM-4 Plus (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "glm-4-air" -ForegroundColor White -NoNewline; Write-Host "                   - GLM-4 Air (fast)"
-                            Write-Host "    3) " -NoNewline; Write-Host "glm-4-flash" -ForegroundColor White -NoNewline; Write-Host "                 - GLM-4 Flash (fastest)"
-                            Write-Host "    c) Custom model name"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'glm-4-plus' }
-                                '2' { 'glm-4-air' }
-                                '3' { 'glm-4-flash' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
-                                default { 'glm-4-plus' }
-                            }
-                        }
-                        'ollama' {
-                            Write-Host "  Select model (or enter any Ollama model tag):"
-                            Write-Host "    1) " -NoNewline; Write-Host "llama3.3" -ForegroundColor White -NoNewline; Write-Host "                    - Llama 3.3 (recommended)"
-                            Write-Host "    2) " -NoNewline; Write-Host "qwen2.5-coder:32b" -ForegroundColor White -NoNewline; Write-Host "           - Qwen 2.5 Coder 32B"
-                            Write-Host "    3) " -NoNewline; Write-Host "deepseek-r1:32b" -ForegroundColor White -NoNewline; Write-Host "             - DeepSeek R1 32B"
-                            Write-Host "    c) Custom model tag"
-                            Write-Host ""
-                            $mc = Prompt-Input "Select model" "1"
-                            $modelName = switch ($mc) {
-                                '1' { 'llama3.3' }
-                                '2' { 'qwen2.5-coder:32b' }
-                                '3' { 'deepseek-r1:32b' }
-                                { $_ -in 'c','C' } { Prompt-Input "Model tag" }
-                                default { 'llama3.3' }
-                            }
-                        }
-                        'openai-compatible' {
-                            $modelName = Prompt-Input "Model name"
-                        }
+                if (-not $modelName) {
+                    if (-not $script:NonInteractive) {
+                        if ($modelHints) { Info "Other models: $modelHints" }
+                        $modelName = Prompt-Input "Model name" $defaultModel
+                    } else {
+                        $modelName = $defaultModel
                     }
                 }
 
-                # Fallback defaults for non-interactive mode
-                if (-not $modelName) {
-                    $modelName = switch ($provider) {
-                        'anthropic'         { 'claude-sonnet-4-20250514' }
-                        'openai'            { 'gpt-4o' }
-                        'openai-codex'      { 'codex-mini-latest' }
-                        'google'            { 'gemini-2.5-flash' }
-                        'openrouter'        { 'anthropic/claude-sonnet-4' }
-                        'xai'               { 'grok-3' }
-                        'mistral'           { 'mistral-large-latest' }
-                        'groq'              { 'llama-3.3-70b-versatile' }
-                        'minimax'           { 'MiniMax-M2.5' }
-                        'zai'               { 'glm-4-plus' }
-                        'ollama'            { 'llama3.3' }
-                        'openai-compatible' { Warn "No --model-name provided for openai-compatible; skipping model setup"; $provider = ''; '' }
-                        default             { '' }
-                    }
+                # Guard: openai-compatible requires a model name
+                if (-not $modelName -and $provider -eq 'openai-compatible') {
+                    Warn "No model name provided for openai-compatible; skipping model setup"
+                    $provider = ''
                 }
 
                 # Build primary model identifier: "provider/model"

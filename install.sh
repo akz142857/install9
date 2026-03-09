@@ -819,196 +819,41 @@ CONF
       fi
 
       if [[ -n "$provider" ]]; then
-        # Interactive model selection per provider
-        if [[ -z "$model_name" && "$NON_INTERACTIVE" != "true" ]]; then
-          echo ""
-          case "$provider" in
-            anthropic)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}claude-sonnet-4-20250514${NC}    — Sonnet 4 (recommended)"
-              echo -e "    2) ${BOLD}claude-opus-4-20250514${NC}      — Opus 4 (most capable)"
-              echo -e "    3) ${BOLD}claude-haiku-4-20250414${NC}     — Haiku 4 (fastest)"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="claude-sonnet-4-20250514" ;;
-                2) model_name="claude-opus-4-20250514" ;;
-                3) model_name="claude-haiku-4-20250414" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="claude-sonnet-4-20250514" ;;
-              esac ;;
-            openai)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}gpt-4o${NC}                      — GPT-4o (recommended)"
-              echo -e "    2) ${BOLD}gpt-4o-mini${NC}                 — GPT-4o Mini (fast)"
-              echo -e "    3) ${BOLD}o3${NC}                          — o3 (reasoning)"
-              echo -e "    4) ${BOLD}o4-mini${NC}                     — o4-mini (reasoning, fast)"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="gpt-4o" ;;
-                2) model_name="gpt-4o-mini" ;;
-                3) model_name="o3" ;;
-                4) model_name="o4-mini" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="gpt-4o" ;;
-              esac ;;
-            openai-codex)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}codex-mini-latest${NC}           — Codex Mini (recommended)"
-              echo -e "    2) ${BOLD}o4-mini${NC}                     — o4-mini"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="codex-mini-latest" ;;
-                2) model_name="o4-mini" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="codex-mini-latest" ;;
-              esac ;;
-            google)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}gemini-2.5-flash${NC}            — 2.5 Flash (recommended)"
-              echo -e "    2) ${BOLD}gemini-2.5-pro${NC}              — 2.5 Pro (most capable)"
-              echo -e "    3) ${BOLD}gemini-2.0-flash${NC}            — 2.0 Flash (fast)"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="gemini-2.5-flash" ;;
-                2) model_name="gemini-2.5-pro" ;;
-                3) model_name="gemini-2.0-flash" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="gemini-2.5-flash" ;;
-              esac ;;
-            openrouter)
-              echo -e "  Select model (or enter any OpenRouter model slug):"
-              echo -e "    1) ${BOLD}anthropic/claude-sonnet-4${NC}   — Claude Sonnet 4"
-              echo -e "    2) ${BOLD}openai/gpt-4o${NC}              — GPT-4o"
-              echo -e "    3) ${BOLD}google/gemini-2.5-flash${NC}    — Gemini 2.5 Flash"
-              echo -e "    4) ${BOLD}deepseek/deepseek-chat${NC}     — DeepSeek V3"
-              echo -e "    5) ${BOLD}deepseek/deepseek-r1${NC}       — DeepSeek R1"
-              echo -e "    c) Custom model slug"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="anthropic/claude-sonnet-4" ;;
-                2) model_name="openai/gpt-4o" ;;
-                3) model_name="google/gemini-2.5-flash" ;;
-                4) model_name="deepseek/deepseek-chat" ;;
-                5) model_name="deepseek/deepseek-r1" ;;
-                c|C) model_name=$(prompt "Model slug") ;;
-                *) model_name="anthropic/claude-sonnet-4" ;;
-              esac ;;
-            xai)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}grok-3${NC}                      — Grok 3 (recommended)"
-              echo -e "    2) ${BOLD}grok-3-mini${NC}                 — Grok 3 Mini (fast)"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="grok-3" ;;
-                2) model_name="grok-3-mini" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="grok-3" ;;
-              esac ;;
-            mistral)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}mistral-large-latest${NC}        — Mistral Large (recommended)"
-              echo -e "    2) ${BOLD}mistral-medium-latest${NC}       — Mistral Medium"
-              echo -e "    3) ${BOLD}codestral-latest${NC}            — Codestral (code)"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="mistral-large-latest" ;;
-                2) model_name="mistral-medium-latest" ;;
-                3) model_name="codestral-latest" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="mistral-large-latest" ;;
-              esac ;;
-            groq)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}llama-3.3-70b-versatile${NC}     — Llama 3.3 70B (recommended)"
-              echo -e "    2) ${BOLD}llama-3.1-8b-instant${NC}        — Llama 3.1 8B (fastest)"
-              echo -e "    3) ${BOLD}mixtral-8x7b-32768${NC}          — Mixtral 8x7B"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="llama-3.3-70b-versatile" ;;
-                2) model_name="llama-3.1-8b-instant" ;;
-                3) model_name="mixtral-8x7b-32768" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="llama-3.3-70b-versatile" ;;
-              esac ;;
-            minimax)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}MiniMax-M2.5${NC}                — M2.5 (recommended)"
-              echo -e "    2) ${BOLD}MiniMax-M2.5-highspeed${NC}      — M2.5 Highspeed (faster)"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="MiniMax-M2.5" ;;
-                2) model_name="MiniMax-M2.5-highspeed" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="MiniMax-M2.5" ;;
-              esac ;;
-            zai)
-              echo -e "  Select model:"
-              echo -e "    1) ${BOLD}glm-4-plus${NC}                  — GLM-4 Plus (recommended)"
-              echo -e "    2) ${BOLD}glm-4-air${NC}                   — GLM-4 Air (fast)"
-              echo -e "    3) ${BOLD}glm-4-flash${NC}                 — GLM-4 Flash (fastest)"
-              echo -e "    c) Custom model name"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="glm-4-plus" ;;
-                2) model_name="glm-4-air" ;;
-                3) model_name="glm-4-flash" ;;
-                c|C) model_name=$(prompt "Model name") ;;
-                *) model_name="glm-4-plus" ;;
-              esac ;;
-            ollama)
-              echo -e "  Select model (or enter any Ollama model tag):"
-              echo -e "    1) ${BOLD}llama3.3${NC}                    — Llama 3.3 (recommended)"
-              echo -e "    2) ${BOLD}qwen2.5-coder:32b${NC}           — Qwen 2.5 Coder 32B"
-              echo -e "    3) ${BOLD}deepseek-r1:32b${NC}             — DeepSeek R1 32B"
-              echo -e "    c) Custom model tag"
-              echo ""
-              local mc; mc=$(prompt "Select model" "1")
-              case "$mc" in
-                1) model_name="llama3.3" ;;
-                2) model_name="qwen2.5-coder:32b" ;;
-                3) model_name="deepseek-r1:32b" ;;
-                c|C) model_name=$(prompt "Model tag") ;;
-                *) model_name="llama3.3" ;;
-              esac ;;
-            openai-compatible)
-              model_name=$(prompt "Model name") ;;
-          esac
+        # Default model and example hints per provider
+        local default_model="" model_hints=""
+        case "$provider" in
+          anthropic)         default_model="claude-sonnet-4";       model_hints="claude-opus-4, claude-haiku-4" ;;
+          openai)            default_model="gpt-4o";                model_hints="gpt-4o-mini, o3, o4-mini" ;;
+          openai-codex)      default_model="codex-mini-latest";     model_hints="o4-mini" ;;
+          google)            default_model="gemini-2.5-flash";      model_hints="gemini-2.5-pro, gemini-2.0-flash" ;;
+          openrouter)        default_model="anthropic/claude-sonnet-4"; model_hints="openai/gpt-4o, deepseek/deepseek-chat" ;;
+          xai)               default_model="grok-3";                model_hints="grok-3-mini" ;;
+          mistral)           default_model="mistral-large-latest";  model_hints="codestral-latest, mistral-medium-latest" ;;
+          groq)              default_model="llama-3.3-70b-versatile"; model_hints="llama-3.1-8b-instant, mixtral-8x7b-32768" ;;
+          minimax)           default_model="MiniMax-M2.5";          model_hints="MiniMax-M2.5-highspeed" ;;
+          zai)               default_model="glm-4-plus";            model_hints="glm-4-air, glm-4-flash" ;;
+          ollama)            default_model="llama3.3";              model_hints="qwen2.5-coder:32b, deepseek-r1:32b" ;;
+          openai-compatible) default_model="" ;;
+        esac
+
+        # Prompt for model name (or use CLI arg / fallback default)
+        if [[ -z "$model_name" ]]; then
+          if [[ "$NON_INTERACTIVE" != "true" ]]; then
+            if [[ -n "$model_hints" ]]; then
+              info "Other models: ${model_hints}"
+            fi
+            model_name=$(prompt "Model name" "$default_model")
+          else
+            model_name="$default_model"
+          fi
         fi
 
-        # Fallback: if model_name still empty (non-interactive without --model-name)
+        # Guard: openai-compatible requires a model name
         if [[ -z "$model_name" ]]; then
-          case "$provider" in
-            anthropic)         model_name="claude-sonnet-4-20250514" ;;
-            openai)            model_name="gpt-4o" ;;
-            openai-codex)      model_name="codex-mini-latest" ;;
-            google)            model_name="gemini-2.5-flash" ;;
-            openrouter)        model_name="anthropic/claude-sonnet-4" ;;
-            xai)               model_name="grok-3" ;;
-            mistral)           model_name="mistral-large-latest" ;;
-            groq)              model_name="llama-3.3-70b-versatile" ;;
-            minimax)           model_name="MiniMax-M2.5" ;;
-            zai)               model_name="glm-4-plus" ;;
-            ollama)            model_name="llama3.3" ;;
-            openai-compatible) warn "No --model-name provided for openai-compatible; skipping model setup"; provider="" ;;
-          esac
+          if [[ "$provider" == "openai-compatible" ]]; then
+            warn "No model name provided for openai-compatible; skipping model setup"
+            provider=""
+          fi
         fi
 
         # Build primary model identifier: "provider/model"
