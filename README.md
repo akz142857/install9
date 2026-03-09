@@ -58,10 +58,20 @@ curl -fsSL https://install9.ai/openclaw | bash -s -- \
 | macOS | arm64, x86_64 | Homebrew |
 | Linux | amd64, arm64 | apt, dnf, yum, pacman, apk |
 
+## Installation UI flow
+
+Interactive installation step-by-step guide:
+
+- [中文版](docs/install-ui-flow-zh.md)
+- [English](docs/install-ui-flow-en.md)
+
 ## Project structure
 
 ```
 .
+├── docs/
+│   ├── install-ui-flow-zh.md   # Installation UI flow (Chinese)
+│   └── install-ui-flow-en.md   # Installation UI flow (English)
 ├── install.sh                  # The installer script
 ├── LICENSE                     # Apache-2.0
 └── README.md
