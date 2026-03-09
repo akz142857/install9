@@ -14,9 +14,10 @@ install9 is a single shell script that takes a fresh machine from zero to a full
 2. **Dependency installation** — Installs Node.js via nvm with automatic PATH configuration
 3. **OpenClaw installation** — Installs or upgrades OpenClaw via npm
 4. **Configuration initialization** — Creates `~/.openclaw/openclaw.json` with sensible defaults
-5. **Gateway service setup** — Configures launchd (macOS) or systemd (Linux) with secure token management
-6. **Channel integration** — Interactive guided setup for Feishu/Lark (more channels coming)
+5. **Gateway service setup** — Configures launchd (macOS), systemd (Linux), or foreground mode (Docker / containers) with secure token management
+6. **Channel integration** — Interactive guided setup for Feishu/Lark, Telegram, Slack, Discord
 7. **Security hardening** — File system isolation, command deny-lists, memory search controls
+8. **Dashboard** — Automatically opens the OpenClaw Dashboard in browser on completion
 
 ## Usage
 
@@ -26,7 +27,9 @@ install9 is a single shell script that takes a fresh machine from zero to a full
 curl -fsSL https://install9.ai/openclaw | bash
 ```
 
-### Non-interactive
+### Non-interactive examples
+
+Feishu / Lark:
 
 ```sh
 curl -fsSL https://install9.ai/openclaw | bash -s -- \
@@ -36,20 +39,89 @@ curl -fsSL https://install9.ai/openclaw | bash -s -- \
   --feishu-app-secret xxx
 ```
 
+Telegram:
+
+```sh
+curl -fsSL https://install9.ai/openclaw | bash -s -- \
+  --non-interactive \
+  --channel telegram \
+  --telegram-token "123456789:ABCdefGHI..."
+```
+
+Slack:
+
+```sh
+curl -fsSL https://install9.ai/openclaw | bash -s -- \
+  --non-interactive \
+  --channel slack \
+  --slack-bot-token "xoxb-..." \
+  --slack-app-token "xapp-..."
+```
+
+Discord:
+
+```sh
+curl -fsSL https://install9.ai/openclaw | bash -s -- \
+  --non-interactive \
+  --channel discord \
+  --discord-token "your-bot-token"
+```
+
+### Uninstall
+
+```sh
+curl -fsSL https://install9.ai/openclaw | bash -s -- --uninstall
+```
+
+Or if you have the script locally:
+
+```sh
+bash install.sh --uninstall
+```
+
+Non-interactive uninstall (no confirmation prompts):
+
+```sh
+bash install.sh --non-interactive --uninstall
+```
+
+The uninstaller will:
+
+- Stop and remove the gateway service (launchd / systemd / background process)
+- Uninstall the `openclaw` npm package
+- Back up `~/.openclaw/` to `~/openclaw-backup-*.tar.gz`, then delete it
+- Remove `OPENCLAW_GATEWAY_TOKEN` from shell RC files (`.bashrc`, `.zshrc`, `config.fish`)
+- Clean up temporary files (`/tmp/openclaw`)
+- Keep nvm and Node.js (shared dependencies)
+
 ### CLI flags
 
 | Flag | Description |
 |------|-------------|
 | `--non-interactive` | Skip all prompts, use defaults |
-| `--channel feishu\|lark` | Auto-configure Feishu/Lark channel |
+| `--channel NAME` | Channel to configure (`feishu`, `lark`, `telegram`, `slack`, `discord`) |
 | `--feishu-app-id ID` | Feishu App ID |
 | `--feishu-app-secret SECRET` | Feishu App Secret |
-| `--feishu-domain feishu\|lark` | Feishu or Lark domain (default: `feishu`) |
-| `--skip-security` | Skip security hardening phase |
+| `--feishu-domain DOMAIN` | `feishu` (default) or `lark` |
+| `--telegram-token TOKEN` | Telegram Bot Token (from @BotFather) |
+| `--slack-bot-token TOKEN` | Slack Bot Token (`xoxb-...`) |
+| `--slack-app-token TOKEN` | Slack App Token (`xapp-...`, for Socket Mode) |
+| `--discord-token TOKEN` | Discord Bot Token |
+| `--uninstall` | Uninstall OpenClaw and clean up |
 | `--skip-channel` | Skip channel setup phase |
+| `--skip-security` | Skip security hardening phase |
 | `--skip-deps` | Skip dependency installation |
 | `-h, --help` | Show help message |
 | `-v, --version` | Show installer version |
+
+## Supported channels
+
+| Channel | Status | Credentials needed |
+|---------|--------|--------------------|
+| Feishu / Lark | Supported | App ID + App Secret |
+| Telegram | Supported | Bot Token (from @BotFather) |
+| Slack | Supported | Bot Token (`xoxb-`) + App Token (`xapp-`, Socket Mode) |
+| Discord | Supported | Bot Token |
 
 ## Supported platforms
 
@@ -57,6 +129,7 @@ curl -fsSL https://install9.ai/openclaw | bash -s -- \
 |----|---------------|-----------------|
 | macOS | arm64, x86_64 | Homebrew |
 | Linux | amd64, arm64 | apt, dnf, yum, pacman, apk |
+| Docker | arm64, amd64 | (auto-detected, gateway runs in foreground mode) |
 
 ## Installation UI flow
 
@@ -94,6 +167,15 @@ Or run locally:
 
 ```sh
 bash install.sh --help
+```
+
+### Testing uninstall
+
+```sh
+docker run --rm -it ubuntu:22.04 bash -c \
+  "apt-get update && apt-get install -y curl && \
+   bash <(curl -fsSL https://install9.ai/openclaw) --non-interactive --skip-channel && \
+   bash <(curl -fsSL https://install9.ai/openclaw) --non-interactive --uninstall"
 ```
 
 ### Linting

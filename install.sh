@@ -5,13 +5,13 @@
 #    curl -fsSL https://install9.ai/openclaw | bash
 #    curl -fsSL https://install9.ai/openclaw | bash -s -- --help
 #
-#  Version: 1.1.0
+#  Version: 1.0.0
 #  License: Apache-2.0
 #  Compat:  macOS (arm64/x86_64) · Linux (amd64/arm64)
 # ══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-INSTALLER_VERSION="1.1.0"
+INSTALLER_VERSION="1.0.0"
 MIN_NODE_MAJOR=22
 OPENCLAW_PKG="openclaw"
 OPENCLAW_CONFIG_DIR="$HOME/.openclaw"
@@ -24,6 +24,11 @@ ARG_CHANNEL=""
 ARG_FEISHU_APP_ID=""
 ARG_FEISHU_APP_SECRET=""
 ARG_FEISHU_DOMAIN="feishu"
+ARG_TELEGRAM_BOT_TOKEN=""
+ARG_SLACK_BOT_TOKEN=""
+ARG_SLACK_APP_TOKEN=""
+ARG_DISCORD_BOT_TOKEN=""
+ARG_UNINSTALL=false
 ARG_SKIP_SECURITY=false
 ARG_SKIP_CHANNEL=false
 ARG_SKIP_DEPS=false
@@ -54,10 +59,15 @@ Usage:
 
 Options:
   --non-interactive            Skip all prompts (use with flags below)
-  --channel <name>             Channel to configure (feishu|lark)
+  --channel <name>             Channel to configure (feishu|lark|telegram|slack|discord)
   --feishu-app-id <id>         Feishu App ID
   --feishu-app-secret <secret> Feishu App Secret
   --feishu-domain <domain>     feishu (default) or lark
+  --telegram-token <token>     Telegram Bot Token (from @BotFather)
+  --slack-bot-token <token>    Slack Bot Token (xoxb-...)
+  --slack-app-token <token>    Slack App Token (xapp-..., for Socket Mode)
+  --discord-token <token>      Discord Bot Token
+  --uninstall                  Uninstall OpenClaw and clean up
   --skip-channel               Skip channel setup
   --skip-security              Skip security hardening
   --skip-deps                  Skip dependency installation
@@ -83,6 +93,19 @@ parse_args() {
       --feishu-domain)
         if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--feishu-domain requires a value"; fi
         ARG_FEISHU_DOMAIN="$2"; shift ;;
+      --telegram-token)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--telegram-token requires a value"; fi
+        ARG_TELEGRAM_BOT_TOKEN="$2"; shift ;;
+      --slack-bot-token)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--slack-bot-token requires a value"; fi
+        ARG_SLACK_BOT_TOKEN="$2"; shift ;;
+      --slack-app-token)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--slack-app-token requires a value"; fi
+        ARG_SLACK_APP_TOKEN="$2"; shift ;;
+      --discord-token)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--discord-token requires a value"; fi
+        ARG_DISCORD_BOT_TOKEN="$2"; shift ;;
+      --uninstall)         ARG_UNINSTALL=true ;;
       --skip-channel)      ARG_SKIP_CHANNEL=true ;;
       --skip-security)     ARG_SKIP_SECURITY=true ;;
       --skip-deps)         ARG_SKIP_DEPS=true ;;
@@ -882,6 +905,304 @@ setup_channel_feishu() {
   fi
 }
 
+# ── Telegram ──
+setup_channel_telegram() {
+  local telegram_ext="${OC_ROOT}/extensions/telegram"
+
+  if [[ ! -d "$telegram_ext" ]]; then
+    warn "Telegram extension not found at ${telegram_ext}, skipping"
+    return
+  fi
+
+  # Check existing config
+  local existing_token
+  existing_token=$(config_read "channels.telegram.botToken")
+
+  local skip_config=false
+  if [[ -n "$existing_token" ]]; then
+    warn "Telegram already configured"
+    if ! confirm "Reconfigure?"; then
+      skip_config=true
+    fi
+  fi
+
+  if [[ "$skip_config" != "true" ]]; then
+    echo ""
+    echo -e "  ${CYAN}Telegram Bot Setup Guide:${NC}"
+    echo -e "    1. Open Telegram, find ${BOLD}@BotFather${NC}"
+    echo -e "    2. Send ${BOLD}/newbot${NC} to create a bot"
+    echo -e "    3. Copy the ${YELLOW}Bot Token${NC} (e.g. 123456:ABC-DEF...)"
+    echo ""
+
+    local bot_token
+
+    if [[ -n "$ARG_TELEGRAM_BOT_TOKEN" ]]; then
+      bot_token="$ARG_TELEGRAM_BOT_TOKEN"
+    else
+      bot_token=$(prompt_secret "Bot Token")
+    fi
+
+    if [[ -z "$bot_token" ]]; then
+      warn "No Bot Token provided, skipping Telegram setup"
+      return
+    fi
+
+    # Validate format
+    if [[ ! "$bot_token" =~ ^[0-9]+:[a-zA-Z0-9_-]+$ ]]; then
+      warn "Token format may be incorrect (expected: 123456789:ABCdefGHI...)"
+    fi
+
+    # Write config
+    config_backup
+    TG_BOT_TOKEN="$bot_token" \
+    OC_FILE="$OPENCLAW_CONFIG" \
+    node -e '
+      const fs = require("fs");
+      const f = process.env.OC_FILE;
+      const config = JSON.parse(fs.readFileSync(f, "utf8"));
+
+      if (!config.channels) config.channels = {};
+      config.channels.telegram = {
+        ...config.channels.telegram,
+        enabled: true,
+        botToken: process.env.TG_BOT_TOKEN,
+        groupPolicy: "open"
+      };
+
+      if (!config.plugins) config.plugins = {};
+      if (!config.plugins.allow) config.plugins.allow = [];
+      if (!config.plugins.allow.includes("telegram")) config.plugins.allow.push("telegram");
+      if (!config.plugins.entries) config.plugins.entries = {};
+      config.plugins.entries.telegram = { enabled: true };
+
+      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
+    '
+
+    ok "Telegram config written"
+  fi
+
+  # Restart gateway to load plugin
+  info "Restarting gateway to load Telegram plugin..."
+  openclaw gateway restart 2>&1 | head -1 || true
+  sleep 5
+
+  # Verify
+  local status_out
+  status_out=$(openclaw status 2>&1 || true)
+  if echo "$status_out" | grep -qi "telegram.*OK\|telegram.*online\|telegram.*polling"; then
+    ok "Telegram channel: active"
+  else
+    warn "Telegram may need a moment to connect. Check: openclaw status"
+  fi
+}
+
+# ── Slack ──
+setup_channel_slack() {
+  local slack_ext="${OC_ROOT}/extensions/slack"
+
+  if [[ ! -d "$slack_ext" ]]; then
+    warn "Slack extension not found at ${slack_ext}, skipping"
+    return
+  fi
+
+  # Check existing config
+  local existing_token
+  existing_token=$(config_read "channels.slack.botToken")
+
+  local skip_config=false
+  if [[ -n "$existing_token" ]]; then
+    warn "Slack already configured"
+    if ! confirm "Reconfigure?"; then
+      skip_config=true
+    fi
+  fi
+
+  if [[ "$skip_config" != "true" ]]; then
+    echo ""
+    echo -e "  ${CYAN}Slack App Setup Guide:${NC}"
+    echo -e "    1. Go to ${BOLD}https://api.slack.com/apps${NC}"
+    echo -e "    2. Create a new app → ${BOLD}From scratch${NC}"
+    echo -e "    3. Enable ${BOLD}Socket Mode${NC} → copy ${YELLOW}App-Level Token${NC} (xapp-...)"
+    echo -e "    4. Under ${BOLD}OAuth & Permissions${NC}, add Bot scopes:"
+    echo -e "       ${DIM}chat:write, channels:history, groups:history, im:history,${NC}"
+    echo -e "       ${DIM}im:read, users:read, reactions:read, files:read${NC}"
+    echo -e "    5. Install to workspace → copy ${YELLOW}Bot Token${NC} (xoxb-...)"
+    echo -e "    6. Enable ${BOLD}Event Subscriptions${NC} → subscribe to:"
+    echo -e "       ${DIM}message.channels, message.groups, message.im, app_mention${NC}"
+    echo ""
+
+    local bot_token app_token
+
+    if [[ -n "$ARG_SLACK_BOT_TOKEN" ]]; then
+      bot_token="$ARG_SLACK_BOT_TOKEN"
+    else
+      bot_token=$(prompt_secret "Bot Token (xoxb-...)")
+    fi
+
+    if [[ -z "$bot_token" ]]; then
+      warn "No Bot Token provided, skipping Slack setup"
+      return
+    fi
+
+    if [[ ! "$bot_token" =~ ^xoxb- ]]; then
+      warn "Bot Token should start with xoxb-"
+    fi
+
+    if [[ -n "$ARG_SLACK_APP_TOKEN" ]]; then
+      app_token="$ARG_SLACK_APP_TOKEN"
+    else
+      app_token=$(prompt_secret "App Token (xapp-..., for Socket Mode)")
+    fi
+
+    if [[ -z "$app_token" ]]; then
+      warn "No App Token provided, skipping Slack setup"
+      return
+    fi
+
+    if [[ ! "$app_token" =~ ^xapp- ]]; then
+      warn "App Token should start with xapp-"
+    fi
+
+    # Write config
+    config_backup
+    SLACK_BOT_TOKEN="$bot_token" \
+    SLACK_APP_TOKEN="$app_token" \
+    OC_FILE="$OPENCLAW_CONFIG" \
+    node -e '
+      const fs = require("fs");
+      const f = process.env.OC_FILE;
+      const config = JSON.parse(fs.readFileSync(f, "utf8"));
+
+      if (!config.channels) config.channels = {};
+      config.channels.slack = {
+        ...config.channels.slack,
+        enabled: true,
+        mode: "socket",
+        botToken: process.env.SLACK_BOT_TOKEN,
+        appToken: process.env.SLACK_APP_TOKEN,
+        groupPolicy: "open"
+      };
+
+      if (!config.plugins) config.plugins = {};
+      if (!config.plugins.allow) config.plugins.allow = [];
+      if (!config.plugins.allow.includes("slack")) config.plugins.allow.push("slack");
+      if (!config.plugins.entries) config.plugins.entries = {};
+      config.plugins.entries.slack = { enabled: true };
+
+      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
+    '
+
+    ok "Slack config written"
+  fi
+
+  # Restart gateway to load plugin
+  info "Restarting gateway to load Slack plugin..."
+  openclaw gateway restart 2>&1 | head -1 || true
+  sleep 5
+
+  # Verify
+  local status_out
+  status_out=$(openclaw status 2>&1 || true)
+  if echo "$status_out" | grep -qi "slack.*OK\|slack.*online\|slack.*connect"; then
+    ok "Slack channel: active"
+  else
+    warn "Slack may need a moment to connect. Check: openclaw status"
+  fi
+}
+
+# ── Discord ──
+setup_channel_discord() {
+  local discord_ext="${OC_ROOT}/extensions/discord"
+
+  if [[ ! -d "$discord_ext" ]]; then
+    warn "Discord extension not found at ${discord_ext}, skipping"
+    return
+  fi
+
+  # Check existing config
+  local existing_token
+  existing_token=$(config_read "channels.discord.token")
+
+  local skip_config=false
+  if [[ -n "$existing_token" ]]; then
+    warn "Discord already configured"
+    if ! confirm "Reconfigure?"; then
+      skip_config=true
+    fi
+  fi
+
+  if [[ "$skip_config" != "true" ]]; then
+    echo ""
+    echo -e "  ${CYAN}Discord Bot Setup Guide:${NC}"
+    echo -e "    1. Go to ${BOLD}https://discord.com/developers/applications${NC}"
+    echo -e "    2. Create a new application"
+    echo -e "    3. Go to ${BOLD}Bot${NC} → Reset Token → copy ${YELLOW}Bot Token${NC}"
+    echo -e "    4. Enable ${BOLD}Privileged Gateway Intents${NC}:"
+    echo -e "       ${DIM}Message Content Intent${NC}"
+    echo -e "    5. Go to ${BOLD}OAuth2 → URL Generator${NC}:"
+    echo -e "       Scopes: ${DIM}bot${NC}"
+    echo -e "       Permissions: ${DIM}Send Messages, Read Message History,${NC}"
+    echo -e "       ${DIM}Add Reactions, Attach Files, Use Slash Commands${NC}"
+    echo -e "    6. Use the generated URL to invite the bot to your server"
+    echo ""
+
+    local bot_token
+
+    if [[ -n "$ARG_DISCORD_BOT_TOKEN" ]]; then
+      bot_token="$ARG_DISCORD_BOT_TOKEN"
+    else
+      bot_token=$(prompt_secret "Bot Token")
+    fi
+
+    if [[ -z "$bot_token" ]]; then
+      warn "No Bot Token provided, skipping Discord setup"
+      return
+    fi
+
+    # Write config
+    config_backup
+    DISCORD_TOKEN="$bot_token" \
+    OC_FILE="$OPENCLAW_CONFIG" \
+    node -e '
+      const fs = require("fs");
+      const f = process.env.OC_FILE;
+      const config = JSON.parse(fs.readFileSync(f, "utf8"));
+
+      if (!config.channels) config.channels = {};
+      config.channels.discord = {
+        ...config.channels.discord,
+        enabled: true,
+        token: process.env.DISCORD_TOKEN,
+        groupPolicy: "open"
+      };
+
+      if (!config.plugins) config.plugins = {};
+      if (!config.plugins.allow) config.plugins.allow = [];
+      if (!config.plugins.allow.includes("discord")) config.plugins.allow.push("discord");
+      if (!config.plugins.entries) config.plugins.entries = {};
+      config.plugins.entries.discord = { enabled: true };
+
+      fs.writeFileSync(f, JSON.stringify(config, null, 2) + "\n");
+    '
+
+    ok "Discord config written"
+  fi
+
+  # Restart gateway to load plugin
+  info "Restarting gateway to load Discord plugin..."
+  openclaw gateway restart 2>&1 | head -1 || true
+  sleep 5
+
+  # Verify
+  local status_out
+  status_out=$(openclaw status 2>&1 || true)
+  if echo "$status_out" | grep -qi "discord.*OK\|discord.*online\|discord.*connect"; then
+    ok "Discord channel: active"
+  else
+    warn "Discord may need a moment to connect. Check: openclaw status"
+  fi
+}
+
 phase5_channel() {
   phase "6" "Channel setup"
 
@@ -894,24 +1215,29 @@ phase5_channel() {
   if [[ -z "$channel" && "$NON_INTERACTIVE" != "true" ]]; then
     echo ""
     echo -e "  Available channels:"
-    echo -e "    1) ${BOLD}feishu${NC}  — Feishu / Lark"
-    echo -e "    2) ${DIM}telegram${NC} — Telegram ${DIM}(coming soon)${NC}"
-    echo -e "    3) ${DIM}slack${NC}    — Slack ${DIM}(coming soon)${NC}"
-    echo -e "    4) ${DIM}discord${NC}  — Discord ${DIM}(coming soon)${NC}"
-    echo -e "    5) ${DIM}wechat${NC}   — WeChat Work ${DIM}(coming soon)${NC}"
+    echo -e "    1) ${BOLD}feishu${NC}    — Feishu / Lark"
+    echo -e "    2) ${BOLD}telegram${NC}  — Telegram"
+    echo -e "    3) ${BOLD}slack${NC}     — Slack"
+    echo -e "    4) ${BOLD}discord${NC}   — Discord"
     echo -e "    s) Skip"
     echo ""
     local choice
-    choice=$(prompt "Select channel" "1")
+    choice=$(prompt "Select channel" "s")
     case "$choice" in
-      1|feishu) channel="feishu" ;;
-      s|S)      channel="skip" ;;
-      *)        warn "Not yet supported, skipping"; channel="skip" ;;
+      1|feishu)   channel="feishu" ;;
+      2|telegram) channel="telegram" ;;
+      3|slack)    channel="slack" ;;
+      4|discord)  channel="discord" ;;
+      s|S)        channel="skip" ;;
+      *)          warn "Unknown choice, skipping"; channel="skip" ;;
     esac
   fi
 
   case "$channel" in
     feishu|lark) setup_channel_feishu ;;
+    telegram)    setup_channel_telegram ;;
+    slack)       setup_channel_slack ;;
+    discord)     setup_channel_discord ;;
     skip|"")     info "No channel configured" ;;
     *)           warn "Channel '${channel}' is not yet supported" ;;
   esac
@@ -1048,11 +1374,13 @@ phase7_summary() {
 
   # Detect active channels
   local channels=""
-  local feishu_enabled
-  feishu_enabled=$(config_read "channels.feishu.enabled")
-  if [[ "$feishu_enabled" == "true" ]]; then
-    channels="${channels}feishu "
-  fi
+  for ch in feishu telegram slack discord; do
+    local ch_enabled
+    ch_enabled=$(config_read "channels.${ch}.enabled")
+    if [[ "$ch_enabled" == "true" ]]; then
+      channels="${channels}${ch} "
+    fi
+  done
 
   local gw_port
   gw_port=$(config_read "gateway.port")
@@ -1083,8 +1411,11 @@ phase7_summary() {
     divider
     echo -e "  ${BOLD}Messaging:${NC}"
     echo ""
-    echo -e "    ${CYAN}openclaw message send --channel feishu \\${NC}"
-    echo -e "    ${CYAN}  --target <open_id> --message \"hello\"${NC}"
+    # Show example for the first configured channel
+    local first_ch
+    first_ch=$(echo "$channels" | awk '{print $1}')
+    echo -e "    ${CYAN}openclaw message send --channel ${first_ch} \\${NC}"
+    echo -e "    ${CYAN}  --target <id> --message \"hello\"${NC}"
     echo ""
   fi
 
@@ -1118,10 +1449,140 @@ phase7_summary() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
+#  Uninstall
+# ══════════════════════════════════════════════════════════════════════
+do_uninstall() {
+  banner
+  detect_platform
+
+  echo -e "  ${RED}${BOLD}OpenClaw Uninstaller${NC}"
+  echo ""
+
+  # ── 1. Stop gateway ──
+  info "Stopping gateway..."
+  if [[ "$INIT_SYSTEM" == "launchd" ]]; then
+    openclaw gateway stop 2>/dev/null || true
+    openclaw gateway uninstall 2>/dev/null || true
+    ok "launchd service removed"
+  elif [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl --user stop openclaw-gateway.service 2>/dev/null || true
+    systemctl --user disable openclaw-gateway.service 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/openclaw-gateway.service" 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+    ok "systemd service removed"
+  else
+    # Kill background gateway processes
+    pkill -f "openclaw-gateway" 2>/dev/null || true
+    pkill -f "openclaw gateway" 2>/dev/null || true
+    ok "Gateway processes stopped"
+  fi
+
+  # ── 2. Uninstall npm package ──
+  if command -v openclaw &>/dev/null; then
+    local oc_ver
+    oc_ver=$(openclaw --version 2>/dev/null || echo "unknown")
+    info "Uninstalling openclaw (${oc_ver})..."
+    npm uninstall -g openclaw 2>&1 | tail -1 || true
+    if ! command -v openclaw &>/dev/null; then
+      ok "openclaw npm package removed"
+    else
+      warn "npm uninstall may have failed, try manually: npm uninstall -g openclaw"
+    fi
+  else
+    ok "openclaw not installed (skipped)"
+  fi
+
+  # ── 3. Config & data ──
+  if [[ -d "$OPENCLAW_CONFIG_DIR" ]]; then
+    echo ""
+    echo -e "  ${BOLD}Config directory:${NC} ${OPENCLAW_CONFIG_DIR}"
+    if [[ -f "$OPENCLAW_CONFIG" ]]; then
+      local channels_configured=""
+      for ch in feishu telegram slack discord; do
+        local ch_val
+        ch_val=$(OC_KEY="channels.${ch}.enabled" OC_FILE="$OPENCLAW_CONFIG" node -e '
+          try {
+            const c = JSON.parse(require("fs").readFileSync(process.env.OC_FILE, "utf8"));
+            const keys = process.env.OC_KEY.split(".");
+            let v = c; for (const k of keys) v = v?.[k];
+            console.log(String(v ?? ""));
+          } catch { console.log(""); }
+        ' 2>/dev/null || echo "")
+        if [[ "$ch_val" == "true" ]]; then
+          channels_configured="${channels_configured}${ch} "
+        fi
+      done
+      if [[ -n "$channels_configured" ]]; then
+        warn "Active channels found: ${channels_configured}"
+      fi
+    fi
+    echo ""
+
+    if confirm "Delete config directory (~/.openclaw)?"; then
+      # Backup before deletion
+      local backup_tar="${HOME}/openclaw-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+      info "Creating backup: ${backup_tar}"
+      tar -czf "$backup_tar" -C "$HOME" .openclaw 2>/dev/null && \
+        ok "Backup saved: ${backup_tar}" || \
+        warn "Backup failed, proceeding anyway"
+
+      rm -rf "$OPENCLAW_CONFIG_DIR"
+      ok "Config directory deleted"
+    else
+      info "Config directory kept: ${OPENCLAW_CONFIG_DIR}"
+    fi
+  fi
+
+  # ── 4. Shell RC cleanup ──
+  info "Cleaning shell RC files..."
+  local cleaned=false
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.config/fish/config.fish"; do
+    if [[ -f "$rc_file" ]] && grep -q "OPENCLAW_GATEWAY_TOKEN" "$rc_file" 2>/dev/null; then
+      # Remove the token line and the comment above it
+      if [[ "$OS" == "darwin" ]]; then
+        sed -i '' '/# OpenClaw Gateway Token/d' "$rc_file"
+        sed -i '' '/OPENCLAW_GATEWAY_TOKEN/d' "$rc_file"
+      else
+        sed -i '/# OpenClaw Gateway Token/d' "$rc_file"
+        sed -i '/OPENCLAW_GATEWAY_TOKEN/d' "$rc_file"
+      fi
+      ok "Cleaned: ${rc_file}"
+      cleaned=true
+    fi
+  done
+  if [[ "$cleaned" != "true" ]]; then
+    ok "No token entries found in shell RC files"
+  fi
+
+  # ── 5. Temp files ──
+  if [[ -d "/tmp/openclaw" ]]; then
+    rm -rf "/tmp/openclaw"
+    ok "Cleaned /tmp/openclaw"
+  fi
+
+  # ── Done ──
+  echo ""
+  divider
+  echo -e "  ${GREEN}${BOLD}Uninstall complete.${NC}"
+  echo ""
+  if [[ -d "${NVM_DIR:-$HOME/.nvm}" ]]; then
+    info "nvm and Node.js were kept (shared dependency)."
+    info "To remove nvm: rm -rf ~/.nvm && remove nvm lines from your shell RC"
+  fi
+  echo ""
+}
+
+# ══════════════════════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════════════════════
 main() {
   parse_args "$@"
+
+  if [[ "$ARG_UNINSTALL" == "true" ]]; then
+    do_uninstall
+    exit 0
+  fi
+
   banner
   phase0_detect
   phase1_deps
