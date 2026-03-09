@@ -34,7 +34,7 @@ ARG_SKIP_CHANNEL=false
 ARG_SKIP_DEPS=false
 
 # ── Colors & output (defined early so parse_args can use warn) ──────
-if [[ -t 1 ]] && [[ "${TERM:-}" != "dumb" ]]; then
+if { [[ -t 1 ]] || [[ -t 2 ]]; } && [[ "${TERM:-}" != "dumb" ]]; then
   RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
   CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 else
@@ -111,7 +111,13 @@ parse_args() {
       --skip-deps)         ARG_SKIP_DEPS=true ;;
       -h|--help)           usage ;;
       -v|--version)        echo "openclaw-installer $INSTALLER_VERSION"; exit 0 ;;
-      *) warn "Unknown option: $1" ;;
+      *)
+        if [[ "$NON_INTERACTIVE" == "true" ]]; then
+          fail "Unknown option: $1"
+        else
+          warn "Unknown option: $1"
+        fi ;;
+
     esac
     shift
   done
@@ -296,17 +302,19 @@ retry() {
 # Write token to shell RC with correct syntax per shell type
 write_token_to_rc() {
   local token="$1"
+  # Escape single quotes in token to prevent shell injection
+  local safe_token="${token//\'/\'\\\'\'}"
   mkdir -p "$(dirname "$SHELL_RC")"
 
   if [[ "$SHELL_TYPE" == "fish" ]]; then
-    local fish_line="set -gx OPENCLAW_GATEWAY_TOKEN '${token}'"
+    local fish_line="set -gx OPENCLAW_GATEWAY_TOKEN '${safe_token}'"
     if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
       sed_inplace "s|set -gx OPENCLAW_GATEWAY_TOKEN.*|${fish_line}|" "$SHELL_RC"
     else
       { echo ""; echo "# OpenClaw Gateway Token"; echo "$fish_line"; } >> "$SHELL_RC"
     fi
   else
-    local bash_line="export OPENCLAW_GATEWAY_TOKEN='${token}'"
+    local bash_line="export OPENCLAW_GATEWAY_TOKEN='${safe_token}'"
     if grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
       sed_inplace "s|export OPENCLAW_GATEWAY_TOKEN=.*|${bash_line}|" "$SHELL_RC"
     else
@@ -330,7 +338,7 @@ cleanup() {
 trap cleanup EXIT
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 0: Banner & environment detection
+#  PHASE 1: Banner & environment detection
 # ══════════════════════════════════════════════════════════════════════
 banner() {
   echo ""
@@ -340,7 +348,7 @@ banner() {
   echo ""
 }
 
-phase0_detect() {
+phase1_detect() {
   phase "1" "Detecting environment"
 
   detect_platform
@@ -365,7 +373,7 @@ phase0_detect() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 1: Dependencies
+#  PHASE 2: Dependencies
 # ══════════════════════════════════════════════════════════════════════
 install_pkg() {
   local name="$1"
@@ -435,13 +443,14 @@ install_node_via_pkg() {
         fail "Failed to download NodeSource setup script"
       fi
       ;;
+    # NOTE: "jod" is the Node 22 LTS codename — update when MIN_NODE_MAJOR changes
     pacman) install_pkg nodejs-lts-jod ;;
     apk)    install_pkg "nodejs~=${MIN_NODE_MAJOR}" ;;
     *)      install_node_via_nvm ;;
   esac
 }
 
-phase1_deps() {
+phase2_deps() {
   phase "2" "Checking dependencies"
 
   if [[ "$ARG_SKIP_DEPS" == "true" ]]; then
@@ -480,8 +489,10 @@ phase1_deps() {
   # ── Node.js ──
   local node_ok=false
   if command -v node &>/dev/null; then
-    local node_major
-    node_major=$(node -e "console.log(process.versions.node.split('.')[0])" 2>/dev/null || echo "0")
+    local node_major node_ver_str
+    node_ver_str=$(node --version 2>/dev/null || echo "v0")
+    node_major="${node_ver_str#v}"
+    node_major="${node_major%%.*}"
     if [[ "$node_major" -ge "$MIN_NODE_MAJOR" ]]; then
       ok "Node.js: $(node --version) (meets >= ${MIN_NODE_MAJOR})"
       node_ok=true
@@ -528,9 +539,9 @@ phase1_deps() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 2: Install OpenClaw
+#  PHASE 3: Install OpenClaw
 # ══════════════════════════════════════════════════════════════════════
-phase2_install() {
+phase3_install() {
   phase "3" "Installing OpenClaw"
 
   if command -v openclaw &>/dev/null; then
@@ -591,9 +602,9 @@ phase2_install() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 3: Initialize configuration
+#  PHASE 4: Initialize configuration
 # ══════════════════════════════════════════════════════════════════════
-phase3_init() {
+phase4_init() {
   phase "4" "Initializing configuration"
 
   # Run setup if no config exists
@@ -704,9 +715,9 @@ CONF
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 4: Gateway service
+#  PHASE 5: Gateway service
 # ══════════════════════════════════════════════════════════════════════
-phase4_gateway() {
+phase5_gateway() {
   phase "5" "Setting up gateway service"
 
   if [[ "$INIT_SYSTEM" == "launchd" || "$INIT_SYSTEM" == "systemd" ]]; then
@@ -722,11 +733,23 @@ phase4_gateway() {
     info "Starting gateway in foreground mode..."
 
     local gw_log="$OPENCLAW_CONFIG_DIR/logs/gateway.log"
+    local gw_pidfile="$OPENCLAW_CONFIG_DIR/gateway.pid"
     mkdir -p "$(dirname "$gw_log")"
+    # Stop any previously backgrounded gateway
+    if [[ -f "$gw_pidfile" ]]; then
+      local old_pid
+      old_pid=$(cat "$gw_pidfile" 2>/dev/null || echo "")
+      if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+        kill "$old_pid" 2>/dev/null || true
+      fi
+      rm -f "$gw_pidfile"
+    fi
     nohup openclaw gateway >> "$gw_log" 2>&1 &
     local gw_pid=$!
+    echo "$gw_pid" > "$gw_pidfile"
     ok "Gateway started (PID: ${gw_pid})"
     info "Log: ${gw_log}"
+    info "PID file: ${gw_pidfile}"
     warn "Gateway will stop when this shell exits."
     warn "For persistent service, use a process manager (e.g. supervisord, s6) or systemd."
   fi
@@ -742,7 +765,7 @@ phase4_gateway() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 5: Channel setup
+#  PHASE 6: Channel setup
 # ══════════════════════════════════════════════════════════════════════
 
 # ── Feishu / Lark ──
@@ -876,7 +899,8 @@ setup_channel_feishu() {
       local open_id=""
 
       if [[ -f "$sessions_file" ]]; then
-        open_id=$(grep -Eo 'ou_[a-zA-Z0-9_]{32,}' "$sessions_file" 2>/dev/null | head -1 || echo "")
+        # Extract Open ID from JSON values (quoted strings only, not arbitrary matches)
+        open_id=$(grep -Eo '"ou_[a-zA-Z0-9_]{32,}"' "$sessions_file" 2>/dev/null | head -1 | tr -d '"' || echo "")
       fi
 
       if [[ -n "$open_id" ]]; then
@@ -1203,7 +1227,7 @@ setup_channel_discord() {
   fi
 }
 
-phase5_channel() {
+phase6_channel() {
   phase "6" "Channel setup"
 
   if [[ "$ARG_SKIP_CHANNEL" == "true" ]]; then
@@ -1244,9 +1268,9 @@ phase5_channel() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 6: Security hardening & cleanup
+#  PHASE 7: Security hardening & cleanup
 # ══════════════════════════════════════════════════════════════════════
-phase6_security() {
+phase7_security() {
   phase "7" "Security hardening & cleanup"
 
   if [[ "$ARG_SKIP_SECURITY" == "true" ]]; then
@@ -1340,6 +1364,7 @@ phase6_security() {
         orphans=$((orphans + 1))
       fi
     done
+    # Safe eval: $_old_nullglob is output of `shopt -p nullglob` (deterministic shell builtin)
     eval "$_old_nullglob"
     if [[ $orphans -gt 0 ]]; then
       ok "Cleaned ${orphans} orphan session file(s)"
@@ -1364,9 +1389,9 @@ phase6_security() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 7: Summary
+#  PHASE 8: Summary
 # ══════════════════════════════════════════════════════════════════════
-phase7_summary() {
+phase8_summary() {
   phase "8" "Setup complete"
 
   local oc_version
@@ -1471,9 +1496,18 @@ do_uninstall() {
     systemctl --user daemon-reload 2>/dev/null || true
     ok "systemd service removed"
   else
-    # Kill background gateway processes
-    pkill -f "openclaw-gateway" 2>/dev/null || true
-    pkill -f "openclaw gateway" 2>/dev/null || true
+    # Stop via pidfile first, then fall back to pkill with full command match
+    local gw_pidfile="$OPENCLAW_CONFIG_DIR/gateway.pid"
+    if [[ -f "$gw_pidfile" ]]; then
+      local old_pid
+      old_pid=$(cat "$gw_pidfile" 2>/dev/null || echo "")
+      if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+        kill "$old_pid" 2>/dev/null || true
+      fi
+      rm -f "$gw_pidfile"
+    fi
+    pkill -xf "node.*openclaw-gateway" 2>/dev/null || true
+    pkill -xf "node.*openclaw gateway" 2>/dev/null || true
     ok "Gateway processes stopped"
   fi
 
@@ -1520,11 +1554,14 @@ do_uninstall() {
 
     if confirm "Delete config directory (~/.openclaw)?"; then
       # Backup before deletion
-      local backup_tar="${HOME}/openclaw-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+      local backup_tar
+      backup_tar="${HOME}/openclaw-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
       info "Creating backup: ${backup_tar}"
-      tar -czf "$backup_tar" -C "$HOME" .openclaw 2>/dev/null && \
-        ok "Backup saved: ${backup_tar}" || \
+      if tar -czf "$backup_tar" -C "$HOME" .openclaw 2>/dev/null; then
+        ok "Backup saved: ${backup_tar}"
+      else
         warn "Backup failed, proceeding anyway"
+      fi
 
       rm -rf "$OPENCLAW_CONFIG_DIR"
       ok "Config directory deleted"
@@ -1584,14 +1621,14 @@ main() {
   fi
 
   banner
-  phase0_detect
-  phase1_deps
-  phase2_install
-  phase3_init
-  phase4_gateway
-  phase5_channel
-  phase6_security
-  phase7_summary
+  phase1_detect
+  phase2_deps
+  phase3_install
+  phase4_init
+  phase5_gateway
+  phase6_channel
+  phase7_security
+  phase8_summary
 }
 
 main "$@"
