@@ -1094,20 +1094,22 @@ function Setup-ChannelFeishu {
             $sessionsFile = Join-Path $OPENCLAW_CONFIG_DIR "agents\main\sessions\sessions.json"
             $openId = ""
 
-            if (Test-Path $sessionsFile) {
-                $sessContent = Get-Content $sessionsFile -Raw -ErrorAction SilentlyContinue
-                if ($sessContent -match '"(ou_[a-zA-Z0-9_]{32,})"') {
-                    $openId = $Matches[1]
+            while (-not $openId) {
+                if (Test-Path $sessionsFile) {
+                    $sessContent = Get-Content $sessionsFile -Raw -ErrorAction SilentlyContinue
+                    if ($sessContent -match '"(ou_[a-zA-Z0-9_]{32,})"') {
+                        $openId = $Matches[1]
+                    }
                 }
-            }
 
-            if ($openId) {
-                Info "Detected Open ID: $openId"
-                $openId = Prompt-Input "Confirm Open ID" $openId
-            } else {
-                Warn "No Open ID found. Send a message to your bot in Feishu first,"
-                Warn "then re-run or use: openclaw message send --channel feishu --target <id> --message test"
-                $openId = Prompt-Optional "Open ID (empty to skip)" ""
+                if ($openId) {
+                    Info "Detected Open ID: $openId"
+                    $openId = Prompt-Input "Confirm Open ID" $openId
+                } else {
+                    Warn "No Open ID found. Send a message to your bot in Feishu first."
+                    $retry = Prompt-Input "Press Enter to retry, or 's' to skip" ""
+                    if ($retry -in 's','S') { break }
+                }
             }
 
             if ($openId) {
@@ -1634,15 +1636,19 @@ function Phase8-Summary {
 
     # Dashboard URL
     $dashboardUrl = "http://127.0.0.1:$gwPort/"
+    $dashboardOpenUrl = $dashboardUrl
+    if ($script:GatewayToken) {
+        $dashboardOpenUrl = "${dashboardUrl}#token=$($script:GatewayToken)"
+    }
     Divider
     Write-Host ""
     Write-Host "  > Dashboard:  " -ForegroundColor Green -NoNewline
-    Write-Host $dashboardUrl -ForegroundColor Cyan
+    Write-Host $dashboardOpenUrl -ForegroundColor Cyan
     Write-Host ""
 
     # Auto-open in browser (interactive mode only)
     if (-not $script:NonInteractive) {
-        try { Start-Process $dashboardUrl; Ok "Dashboard opened in browser" } catch { }
+        try { Start-Process $dashboardOpenUrl; Ok "Dashboard opened in browser" } catch { }
     }
 }
 

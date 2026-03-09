@@ -240,10 +240,23 @@ prompt_optional() {
 prompt_secret() {
   local msg="$1"
   if [[ "$NON_INTERACTIVE" == "true" ]]; then echo ""; return; fi
-  local input=""
+  local input="" char=""
   while true; do
     echo -en "  ${BOLD}${msg}${NC}: " >&2
-    _read_input -rs input
+    input=""
+    while true; do
+      _read_input -rsn1 char
+      if [[ -z "$char" ]]; then break; fi          # Enter
+      if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then  # Backspace
+        if [[ -n "$input" ]]; then
+          input="${input%?}"
+          echo -en '\b \b' >&2
+        fi
+      else
+        input+="$char"
+        echo -n '*' >&2
+      fi
+    done
     echo >&2
     if [[ -n "$input" ]]; then echo "$input"; return; fi
     echo -e "  ${RED}Cannot be empty${NC}" >&2
@@ -1180,19 +1193,20 @@ setup_channel_feishu() {
       local sessions_file="$OPENCLAW_CONFIG_DIR/agents/main/sessions/sessions.json"
       local open_id=""
 
-      if [[ -f "$sessions_file" ]]; then
-        # Extract Open ID from JSON values (quoted strings only, not arbitrary matches)
-        open_id=$(grep -Eo '"ou_[a-zA-Z0-9_]{32,}"' "$sessions_file" 2>/dev/null | head -1 | tr -d '"' || echo "")
-      fi
-
-      if [[ -n "$open_id" ]]; then
-        info "Detected Open ID: ${open_id}"
-        open_id=$(prompt "Confirm Open ID" "$open_id")
-      else
-        warn "No Open ID found. Send a message to your bot in Feishu first,"
-        warn "then re-run or use: openclaw message send --channel feishu --target <id> --message test"
-        open_id=$(prompt_optional "Open ID (empty to skip)" "")
-      fi
+      while [[ -z "$open_id" ]]; do
+        if [[ -f "$sessions_file" ]]; then
+          open_id=$(grep -Eo '"ou_[a-zA-Z0-9_]{32,}"' "$sessions_file" 2>/dev/null | head -1 | tr -d '"' || echo "")
+        fi
+        if [[ -n "$open_id" ]]; then
+          info "Detected Open ID: ${open_id}"
+          open_id=$(prompt "Confirm Open ID" "$open_id")
+        else
+          warn "No Open ID found. Send a message to your bot in Feishu first."
+          local retry
+          retry=$(prompt "Press Enter to retry, or 's' to skip" "")
+          if [[ "$retry" == "s" || "$retry" == "S" ]]; then break; fi
+        fi
+      done
 
       if [[ -n "$open_id" ]]; then
         local result
@@ -1754,19 +1768,23 @@ phase8_summary() {
 
   # Dashboard URL — always display prominently
   local dashboard_url="http://127.0.0.1:${gw_port}/"
+  local dashboard_open_url="$dashboard_url"
+  if [[ -n "${GATEWAY_TOKEN:-}" ]]; then
+    dashboard_open_url="${dashboard_url}#token=${GATEWAY_TOKEN}"
+  fi
   divider
   echo ""
-  echo -e "  ${GREEN}${BOLD}▶ Dashboard:${NC}  ${CYAN}${BOLD}${dashboard_url}${NC}"
+  echo -e "  ${GREEN}${BOLD}▶ Dashboard:${NC}  ${CYAN}${BOLD}${dashboard_open_url}${NC}"
   echo ""
 
   # Auto-open in browser (interactive mode only)
   if [[ "$NON_INTERACTIVE" != "true" ]]; then
     if [[ "$OS" == "darwin" ]]; then
-      open "$dashboard_url" 2>/dev/null && ok "Dashboard opened in browser" || true
+      open "$dashboard_open_url" 2>/dev/null && ok "Dashboard opened in browser" || true
     elif command -v xdg-open &>/dev/null; then
-      xdg-open "$dashboard_url" 2>/dev/null && ok "Dashboard opened in browser" || true
+      xdg-open "$dashboard_open_url" 2>/dev/null && ok "Dashboard opened in browser" || true
     elif command -v wslview &>/dev/null; then
-      wslview "$dashboard_url" 2>/dev/null && ok "Dashboard opened in browser" || true
+      wslview "$dashboard_open_url" 2>/dev/null && ok "Dashboard opened in browser" || true
     fi
   fi
 }
