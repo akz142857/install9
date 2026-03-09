@@ -35,6 +35,7 @@ ARG_SELF_UPDATE=false
 ARG_SKIP_SECURITY=false
 ARG_SKIP_CHANNEL=false
 ARG_SKIP_DEPS=false
+ARG_SKIP_MODEL=false
 
 # ── Colors & output (defined early so parse_args can use warn) ──────
 if { [[ -t 1 ]] || [[ -t 2 ]]; } && [[ "${TERM:-}" != "dumb" ]]; then

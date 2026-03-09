@@ -44,6 +44,7 @@ $script:ArgSelfUpdate = $false
 $script:ArgSkipSecurity = $false
 $script:ArgSkipChannel = $false
 $script:ArgSkipDeps = $false
+$script:ArgSkipModel = $false
 $script:NeedTokenFix = $false
 $script:GatewayToken = ""
 $script:OC_ROOT = ""
