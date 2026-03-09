@@ -71,6 +71,11 @@ Options:
   --slack-bot-token <token>    Slack Bot Token (xoxb-...)
   --slack-app-token <token>    Slack App Token (xapp-..., for Socket Mode)
   --discord-token <token>      Discord Bot Token
+  --model-provider <name>      LLM provider (anthropic|openai|openai-codex|google|openrouter|...)
+  --model-name <model>         Model name (e.g. claude-sonnet-4-20250514, gpt-4o)
+  --model-api-key <key>        API key for the LLM provider
+  --model-base-url <url>       Base URL (for openai-compatible provider)
+  --skip-model                 Skip model setup
   --uninstall                  Uninstall OpenClaw and clean up
   --self-update                Update the install9 command itself
   --skip-channel               Skip channel setup
@@ -80,6 +85,10 @@ Options:
   -v, --version                Show installer version
 
 Environment variables (safer than CLI args for secrets):
+  OPENCLAW_MODEL_PROVIDER      LLM provider name
+  OPENCLAW_MODEL_API_KEY       LLM provider API key
+  OPENCLAW_MODEL_NAME          Model name
+  OPENCLAW_MODEL_BASE_URL      Base URL (for openai-compatible)
   OPENCLAW_FEISHU_APP_ID       Feishu App ID
   OPENCLAW_FEISHU_APP_SECRET   Feishu App Secret
   OPENCLAW_TELEGRAM_TOKEN      Telegram Bot Token
@@ -92,6 +101,18 @@ EOF
 
 parse_args() {
   # Support secrets via environment variables (safer than CLI args visible in ps)
+  if [[ -n "${OPENCLAW_MODEL_PROVIDER:-}" ]]; then
+    ARG_MODEL_PROVIDER="$OPENCLAW_MODEL_PROVIDER"; unset OPENCLAW_MODEL_PROVIDER
+  fi
+  if [[ -n "${OPENCLAW_MODEL_API_KEY:-}" ]]; then
+    ARG_MODEL_API_KEY="$OPENCLAW_MODEL_API_KEY"; unset OPENCLAW_MODEL_API_KEY
+  fi
+  if [[ -n "${OPENCLAW_MODEL_NAME:-}" ]]; then
+    ARG_MODEL_NAME="$OPENCLAW_MODEL_NAME"; unset OPENCLAW_MODEL_NAME
+  fi
+  if [[ -n "${OPENCLAW_MODEL_BASE_URL:-}" ]]; then
+    ARG_MODEL_BASE_URL="$OPENCLAW_MODEL_BASE_URL"; unset OPENCLAW_MODEL_BASE_URL
+  fi
   if [[ -n "${OPENCLAW_FEISHU_APP_ID:-}" ]]; then
     ARG_FEISHU_APP_ID="$OPENCLAW_FEISHU_APP_ID"; unset OPENCLAW_FEISHU_APP_ID
   fi
@@ -138,6 +159,19 @@ parse_args() {
       --discord-token)
         if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--discord-token requires a value"; fi
         ARG_DISCORD_BOT_TOKEN="$2"; shift ;;
+      --model-provider)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--model-provider requires a value"; fi
+        ARG_MODEL_PROVIDER="$2"; shift ;;
+      --model-name)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--model-name requires a value"; fi
+        ARG_MODEL_NAME="$2"; shift ;;
+      --model-api-key)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--model-api-key requires a value"; fi
+        ARG_MODEL_API_KEY="$2"; shift ;;
+      --model-base-url)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--model-base-url requires a value"; fi
+        ARG_MODEL_BASE_URL="$2"; shift ;;
+      --skip-model)        ARG_SKIP_MODEL=true ;;
       --uninstall)         ARG_UNINSTALL=true ;;
       --self-update)       ARG_SELF_UPDATE=true ;;
       --skip-channel)      ARG_SKIP_CHANNEL=true ;;
@@ -361,26 +395,27 @@ retry() {
 
 # Write token to shell RC with correct syntax per shell type.
 # Uses delete+append instead of sed substitution to avoid metacharacter issues in tokens.
-write_token_to_rc() {
-  local token="$1"
-  # Escape single quotes in token to prevent shell injection
-  local safe_token="${token//\'/\'\\\'\'}"
+write_env_to_rc() {
+  local var_name="$1" value="$2" comment="$3"
+  local safe_value="${value//\'/\'\\\'\'}"
   mkdir -p "$(dirname "$SHELL_RC")"
 
-  # Remove existing token lines (safe: patterns are fixed strings, not token data)
-  if [[ -f "$SHELL_RC" ]] && grep -q "OPENCLAW_GATEWAY_TOKEN" "$SHELL_RC" 2>/dev/null; then
-    sed_inplace '/# OpenClaw Gateway Token/d' "$SHELL_RC"
-    sed_inplace '/OPENCLAW_GATEWAY_TOKEN/d' "$SHELL_RC"
+  # Remove existing lines for this variable (sed is a safe no-op if pattern absent)
+  if [[ -f "$SHELL_RC" ]]; then
+    sed_inplace -e "/# ${comment}/d" -e "/${var_name}/d" "$SHELL_RC"
   fi
 
-  # Append new token line
   local rc_line=""
   case "$SHELL_TYPE" in
-    fish) rc_line="set -gx OPENCLAW_GATEWAY_TOKEN '${safe_token}'" ;;
-    csh)  rc_line="setenv OPENCLAW_GATEWAY_TOKEN '${safe_token}'" ;;
-    *)    rc_line="export OPENCLAW_GATEWAY_TOKEN='${safe_token}'" ;;
+    fish) rc_line="set -gx ${var_name} '${safe_value}'" ;;
+    csh)  rc_line="setenv ${var_name} '${safe_value}'" ;;
+    *)    rc_line="export ${var_name}='${safe_value}'" ;;
   esac
-  { echo ""; echo "# OpenClaw Gateway Token"; echo "$rc_line"; } >> "$SHELL_RC"
+  { echo ""; echo "# ${comment}"; echo "$rc_line"; } >> "$SHELL_RC"
+}
+
+write_token_to_rc() {
+  write_env_to_rc "OPENCLAW_GATEWAY_TOKEN" "$1" "OpenClaw Gateway Token"
 }
 
 # ── Error handler ────────────────────────────────────────────────────
@@ -733,6 +768,300 @@ CONF
     ok "Config exists: ${OPENCLAW_CONFIG}"
   fi
   harden_config
+
+  # ── Model Setup ──
+  if [[ "$ARG_SKIP_MODEL" != "true" ]]; then
+    local existing_model
+    existing_model=$(config_read "agents.defaults.model.primary")
+
+    if [[ -n "$existing_model" && -z "${ARG_MODEL_PROVIDER:-}" ]]; then
+      ok "Model: ${existing_model} (already configured)"
+    else
+      local provider="${ARG_MODEL_PROVIDER:-}"
+      local model_name="${ARG_MODEL_NAME:-}"
+
+      # Interactive provider selection
+      if [[ -z "$provider" && "$NON_INTERACTIVE" != "true" ]]; then
+        echo ""
+        echo -e "  Select LLM provider:"
+        echo -e "    1)  ${BOLD}anthropic${NC}          — Claude"
+        echo -e "    2)  ${BOLD}openai${NC}             — GPT / o-series"
+        echo -e "    3)  ${BOLD}openai-codex${NC}       — Codex (ChatGPT Plus OAuth)"
+        echo -e "    4)  ${BOLD}google${NC}             — Gemini"
+        echo -e "    5)  ${BOLD}openrouter${NC}         — OpenRouter (100+ models)"
+        echo -e "    6)  ${BOLD}xai${NC}                — Grok"
+        echo -e "    7)  ${BOLD}mistral${NC}            — Mistral"
+        echo -e "    8)  ${BOLD}groq${NC}               — Groq (fast inference)"
+        echo -e "    9)  ${BOLD}zai${NC}                — GLM / ChatGLM (Zhipu AI)"
+        echo -e "    10) ${BOLD}ollama${NC}             — Local models (no API key)"
+        echo -e "    11) ${BOLD}openai-compatible${NC}  — Custom endpoint"
+        echo -e "    s)  Skip"
+        echo ""
+        local choice
+        choice=$(prompt "Select provider" "1")
+        case "$choice" in
+          1|anthropic)         provider="anthropic" ;;
+          2|openai)            provider="openai" ;;
+          3|openai-codex|codex) provider="openai-codex" ;;
+          4|google)            provider="google" ;;
+          5|openrouter)        provider="openrouter" ;;
+          6|xai)               provider="xai" ;;
+          7|mistral)           provider="mistral" ;;
+          8|groq)              provider="groq" ;;
+          9|zai|glm)           provider="zai" ;;
+          10|ollama)           provider="ollama" ;;
+          11|openai-compatible) provider="openai-compatible" ;;
+          s|S)                 provider="" ;;
+          *)                   warn "Unknown choice, skipping model setup"; provider="" ;;
+        esac
+      fi
+
+      if [[ -n "$provider" ]]; then
+        # Interactive model selection per provider
+        if [[ -z "$model_name" && "$NON_INTERACTIVE" != "true" ]]; then
+          echo ""
+          case "$provider" in
+            anthropic)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}claude-sonnet-4-20250514${NC}    — Sonnet 4 (recommended)"
+              echo -e "    2) ${BOLD}claude-opus-4-20250514${NC}      — Opus 4 (most capable)"
+              echo -e "    3) ${BOLD}claude-haiku-4-20250414${NC}     — Haiku 4 (fastest)"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="claude-sonnet-4-20250514" ;;
+                2) model_name="claude-opus-4-20250514" ;;
+                3) model_name="claude-haiku-4-20250414" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="claude-sonnet-4-20250514" ;;
+              esac ;;
+            openai)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}gpt-4o${NC}                      — GPT-4o (recommended)"
+              echo -e "    2) ${BOLD}gpt-4o-mini${NC}                 — GPT-4o Mini (fast)"
+              echo -e "    3) ${BOLD}o3${NC}                          — o3 (reasoning)"
+              echo -e "    4) ${BOLD}o4-mini${NC}                     — o4-mini (reasoning, fast)"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="gpt-4o" ;;
+                2) model_name="gpt-4o-mini" ;;
+                3) model_name="o3" ;;
+                4) model_name="o4-mini" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="gpt-4o" ;;
+              esac ;;
+            openai-codex)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}codex-mini-latest${NC}           — Codex Mini (recommended)"
+              echo -e "    2) ${BOLD}o4-mini${NC}                     — o4-mini"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="codex-mini-latest" ;;
+                2) model_name="o4-mini" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="codex-mini-latest" ;;
+              esac ;;
+            google)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}gemini-2.5-flash${NC}            — 2.5 Flash (recommended)"
+              echo -e "    2) ${BOLD}gemini-2.5-pro${NC}              — 2.5 Pro (most capable)"
+              echo -e "    3) ${BOLD}gemini-2.0-flash${NC}            — 2.0 Flash (fast)"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="gemini-2.5-flash" ;;
+                2) model_name="gemini-2.5-pro" ;;
+                3) model_name="gemini-2.0-flash" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="gemini-2.5-flash" ;;
+              esac ;;
+            openrouter)
+              echo -e "  Select model (or enter any OpenRouter model slug):"
+              echo -e "    1) ${BOLD}anthropic/claude-sonnet-4${NC}   — Claude Sonnet 4"
+              echo -e "    2) ${BOLD}openai/gpt-4o${NC}              — GPT-4o"
+              echo -e "    3) ${BOLD}google/gemini-2.5-flash${NC}    — Gemini 2.5 Flash"
+              echo -e "    4) ${BOLD}deepseek/deepseek-chat${NC}     — DeepSeek V3"
+              echo -e "    5) ${BOLD}deepseek/deepseek-r1${NC}       — DeepSeek R1"
+              echo -e "    c) Custom model slug"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="anthropic/claude-sonnet-4" ;;
+                2) model_name="openai/gpt-4o" ;;
+                3) model_name="google/gemini-2.5-flash" ;;
+                4) model_name="deepseek/deepseek-chat" ;;
+                5) model_name="deepseek/deepseek-r1" ;;
+                c|C) model_name=$(prompt "Model slug") ;;
+                *) model_name="anthropic/claude-sonnet-4" ;;
+              esac ;;
+            xai)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}grok-3${NC}                      — Grok 3 (recommended)"
+              echo -e "    2) ${BOLD}grok-3-mini${NC}                 — Grok 3 Mini (fast)"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="grok-3" ;;
+                2) model_name="grok-3-mini" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="grok-3" ;;
+              esac ;;
+            mistral)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}mistral-large-latest${NC}        — Mistral Large (recommended)"
+              echo -e "    2) ${BOLD}mistral-medium-latest${NC}       — Mistral Medium"
+              echo -e "    3) ${BOLD}codestral-latest${NC}            — Codestral (code)"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="mistral-large-latest" ;;
+                2) model_name="mistral-medium-latest" ;;
+                3) model_name="codestral-latest" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="mistral-large-latest" ;;
+              esac ;;
+            groq)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}llama-3.3-70b-versatile${NC}     — Llama 3.3 70B (recommended)"
+              echo -e "    2) ${BOLD}llama-3.1-8b-instant${NC}        — Llama 3.1 8B (fastest)"
+              echo -e "    3) ${BOLD}mixtral-8x7b-32768${NC}          — Mixtral 8x7B"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="llama-3.3-70b-versatile" ;;
+                2) model_name="llama-3.1-8b-instant" ;;
+                3) model_name="mixtral-8x7b-32768" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="llama-3.3-70b-versatile" ;;
+              esac ;;
+            zai)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}glm-4-plus${NC}                  — GLM-4 Plus (recommended)"
+              echo -e "    2) ${BOLD}glm-4-air${NC}                   — GLM-4 Air (fast)"
+              echo -e "    3) ${BOLD}glm-4-flash${NC}                 — GLM-4 Flash (fastest)"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="glm-4-plus" ;;
+                2) model_name="glm-4-air" ;;
+                3) model_name="glm-4-flash" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="glm-4-plus" ;;
+              esac ;;
+            ollama)
+              echo -e "  Select model (or enter any Ollama model tag):"
+              echo -e "    1) ${BOLD}llama3.3${NC}                    — Llama 3.3 (recommended)"
+              echo -e "    2) ${BOLD}qwen2.5-coder:32b${NC}           — Qwen 2.5 Coder 32B"
+              echo -e "    3) ${BOLD}deepseek-r1:32b${NC}             — DeepSeek R1 32B"
+              echo -e "    c) Custom model tag"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="llama3.3" ;;
+                2) model_name="qwen2.5-coder:32b" ;;
+                3) model_name="deepseek-r1:32b" ;;
+                c|C) model_name=$(prompt "Model tag") ;;
+                *) model_name="llama3.3" ;;
+              esac ;;
+            openai-compatible)
+              model_name=$(prompt "Model name") ;;
+          esac
+        fi
+
+        # Fallback: if model_name still empty (non-interactive without --model-name)
+        if [[ -z "$model_name" ]]; then
+          case "$provider" in
+            anthropic)         model_name="claude-sonnet-4-20250514" ;;
+            openai)            model_name="gpt-4o" ;;
+            openai-codex)      model_name="codex-mini-latest" ;;
+            google)            model_name="gemini-2.5-flash" ;;
+            openrouter)        model_name="anthropic/claude-sonnet-4" ;;
+            xai)               model_name="grok-3" ;;
+            mistral)           model_name="mistral-large-latest" ;;
+            groq)              model_name="llama-3.3-70b-versatile" ;;
+            zai)               model_name="glm-4-plus" ;;
+            ollama)            model_name="llama3.3" ;;
+            openai-compatible) warn "No --model-name provided for openai-compatible; skipping model setup"; provider="" ;;
+          esac
+        fi
+
+        # Build primary model identifier: "provider/model"
+        local model_primary="${provider}/${model_name}"
+
+        # Determine API key env var name (per OpenClaw docs)
+        local api_key_var="" needs_api_key=true
+        case "$provider" in
+          anthropic)         api_key_var="ANTHROPIC_API_KEY" ;;
+          openai)            api_key_var="OPENAI_API_KEY" ;;
+          openai-codex)      needs_api_key=false ;;  # OAuth via ChatGPT Plus
+          google)            api_key_var="GEMINI_API_KEY" ;;
+          openrouter)        api_key_var="OPENROUTER_API_KEY" ;;
+          xai)               api_key_var="XAI_API_KEY" ;;
+          mistral)           api_key_var="MISTRAL_API_KEY" ;;
+          groq)              api_key_var="GROQ_API_KEY" ;;
+          zai)               api_key_var="ZAI_API_KEY" ;;
+          ollama)            needs_api_key=false ;;  # Local, no key needed
+          openai-compatible) api_key_var="OPENAI_API_KEY" ;;
+        esac
+
+        # Get API key
+        local api_key="${ARG_MODEL_API_KEY:-}"
+        if [[ "$needs_api_key" == "true" ]]; then
+          if [[ -z "$api_key" && -n "$api_key_var" ]]; then
+            api_key="${!api_key_var:-}"
+          fi
+          if [[ -z "$api_key" && "$NON_INTERACTIVE" != "true" && -n "$api_key_var" ]]; then
+            api_key=$(prompt_secret "${api_key_var}")
+          fi
+        fi
+
+        # Special note for OAuth-based providers
+        if [[ "$provider" == "openai-codex" && "$NON_INTERACTIVE" != "true" ]]; then
+          info "Codex uses ChatGPT Plus OAuth — run 'openclaw auth login' after install"
+        fi
+
+        # Base URL for openai-compatible
+        local base_url="${ARG_MODEL_BASE_URL:-}"
+        if [[ "$provider" == "openai-compatible" && -z "$base_url" && "$NON_INTERACTIVE" != "true" ]]; then
+          base_url=$(prompt "Base URL (e.g. https://api.example.com/v1)")
+        fi
+
+        # Write model config to openclaw.json
+        config_backup
+        MODEL_PRIMARY="$model_primary" MODEL_BASE_URL="${base_url:-}" config_write '
+          if (!config.agents) config.agents = {};
+          if (!config.agents.defaults) config.agents.defaults = {};
+          if (!config.agents.defaults.model) config.agents.defaults.model = {};
+          config.agents.defaults.model.primary = process.env.MODEL_PRIMARY;
+          if (process.env.MODEL_BASE_URL) config.agents.defaults.model.baseUrl = process.env.MODEL_BASE_URL;
+          else delete config.agents.defaults.model.baseUrl;
+        '
+        harden_config
+        ok "Model: ${model_primary}"
+
+        # Write API key to shell RC
+        if [[ "$needs_api_key" == "true" ]]; then
+          if [[ -n "$api_key" && -n "$api_key_var" ]]; then
+            write_env_to_rc "$api_key_var" "$api_key" "OpenClaw LLM API Key"
+            export "${api_key_var}=${api_key}"
+            ok "API key written to ${SHELL_RC}"
+          elif [[ -n "$api_key_var" ]]; then
+            warn "No API key provided — set ${api_key_var} before starting OpenClaw"
+          fi
+        fi
+      fi
+    fi
+  fi
 
   # ── Gateway Token ──
   info "Checking gateway token..."

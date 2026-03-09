@@ -81,6 +81,11 @@ Options:
   --slack-bot-token <token>    Slack Bot Token (xoxb-...)
   --slack-app-token <token>    Slack App Token (xapp-..., for Socket Mode)
   --discord-token <token>      Discord Bot Token
+  --model-provider <name>      LLM provider (anthropic|openai|openai-codex|google|openrouter|...)
+  --model-name <model>         Model name (e.g. claude-sonnet-4-20250514, gpt-4o)
+  --model-api-key <key>        API key for the LLM provider
+  --model-base-url <url>       Base URL (for openai-compatible provider)
+  --skip-model                 Skip model setup
   --uninstall                  Uninstall OpenClaw and clean up
   --self-update                Update the install9 command itself
   --skip-channel               Skip channel setup
@@ -90,6 +95,10 @@ Options:
   -v, --version                Show installer version
 
 Environment variables (safer than CLI args for secrets):
+  OPENCLAW_MODEL_PROVIDER      LLM provider name
+  OPENCLAW_MODEL_API_KEY       LLM provider API key
+  OPENCLAW_MODEL_NAME          Model name
+  OPENCLAW_MODEL_BASE_URL      Base URL (for openai-compatible)
   OPENCLAW_FEISHU_APP_ID       Feishu App ID
   OPENCLAW_FEISHU_APP_SECRET   Feishu App Secret
   OPENCLAW_TELEGRAM_TOKEN      Telegram Bot Token
@@ -104,6 +113,10 @@ function Parse-Args {
     param([string[]]$Arguments)
 
     # Support secrets via environment variables (safer than CLI args visible in process list)
+    if ($env:OPENCLAW_MODEL_PROVIDER) { $script:ArgModelProvider = $env:OPENCLAW_MODEL_PROVIDER; Remove-Item env:OPENCLAW_MODEL_PROVIDER -EA SilentlyContinue }
+    if ($env:OPENCLAW_MODEL_API_KEY)  { $script:ArgModelApiKey = $env:OPENCLAW_MODEL_API_KEY; Remove-Item env:OPENCLAW_MODEL_API_KEY -EA SilentlyContinue }
+    if ($env:OPENCLAW_MODEL_NAME)     { $script:ArgModelName = $env:OPENCLAW_MODEL_NAME; Remove-Item env:OPENCLAW_MODEL_NAME -EA SilentlyContinue }
+    if ($env:OPENCLAW_MODEL_BASE_URL) { $script:ArgModelBaseUrl = $env:OPENCLAW_MODEL_BASE_URL; Remove-Item env:OPENCLAW_MODEL_BASE_URL -EA SilentlyContinue }
     if ($env:OPENCLAW_FEISHU_APP_ID)     { $script:ArgFeishuAppId = $env:OPENCLAW_FEISHU_APP_ID; Remove-Item env:OPENCLAW_FEISHU_APP_ID -EA SilentlyContinue }
     if ($env:OPENCLAW_FEISHU_APP_SECRET) { $script:ArgFeishuAppSecret = $env:OPENCLAW_FEISHU_APP_SECRET; Remove-Item env:OPENCLAW_FEISHU_APP_SECRET -EA SilentlyContinue }
     if ($env:OPENCLAW_TELEGRAM_TOKEN)    { $script:ArgTelegramToken = $env:OPENCLAW_TELEGRAM_TOKEN; Remove-Item env:OPENCLAW_TELEGRAM_TOKEN -EA SilentlyContinue }
@@ -124,6 +137,11 @@ function Parse-Args {
             '--slack-bot-token'   { $i++; if ($i -ge $Arguments.Count) { Fail "--slack-bot-token requires a value" }; $script:ArgSlackBotToken = $Arguments[$i] }
             '--slack-app-token'   { $i++; if ($i -ge $Arguments.Count) { Fail "--slack-app-token requires a value" }; $script:ArgSlackAppToken = $Arguments[$i] }
             '--discord-token'     { $i++; if ($i -ge $Arguments.Count) { Fail "--discord-token requires a value" }; $script:ArgDiscordToken = $Arguments[$i] }
+            '--model-provider'    { $i++; if ($i -ge $Arguments.Count) { Fail "--model-provider requires a value" }; $script:ArgModelProvider = $Arguments[$i] }
+            '--model-name'        { $i++; if ($i -ge $Arguments.Count) { Fail "--model-name requires a value" }; $script:ArgModelName = $Arguments[$i] }
+            '--model-api-key'     { $i++; if ($i -ge $Arguments.Count) { Fail "--model-api-key requires a value" }; $script:ArgModelApiKey = $Arguments[$i] }
+            '--model-base-url'    { $i++; if ($i -ge $Arguments.Count) { Fail "--model-base-url requires a value" }; $script:ArgModelBaseUrl = $Arguments[$i] }
+            '--skip-model'        { $script:ArgSkipModel = $true }
             '--uninstall'         { $script:ArgUninstall = $true }
             '--self-update'       { $script:ArgSelfUpdate = $true }
             '--skip-channel'      { $script:ArgSkipChannel = $true }
@@ -301,26 +319,30 @@ function Retry {
     }
 }
 
-function Write-TokenToProfile {
-    param([string]$Token)
+function Write-EnvToProfile {
+    param([string]$VarName, [string]$Value, [string]$Comment)
     $profileDir = Split-Path $PROFILE -Parent
     if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
     if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
 
-    $line = "`$env:OPENCLAW_GATEWAY_TOKEN = '$($Token -replace "'","''")'"
+    $line = "`$env:$VarName = '$($Value -replace "'","''")'"
     $content = Get-Content $PROFILE -ErrorAction SilentlyContinue
 
-    if ($content -and ($content | Select-String 'OPENCLAW_GATEWAY_TOKEN')) {
+    if ($content -and ($content | Select-String $VarName)) {
         $content = $content | ForEach-Object {
-            if ($_ -match 'OPENCLAW_GATEWAY_TOKEN') { $line } else { $_ }
+            if ($_ -match $VarName) { $line } else { $_ }
         }
         $content | Set-Content $PROFILE
     } else {
-        Add-Content $PROFILE "`n# OpenClaw Gateway Token`n$line"
+        Add-Content $PROFILE "`n# $Comment`n$line"
     }
 
-    # Also set as persistent user environment variable (works across cmd/pwsh)
-    [Environment]::SetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN', $Token, 'User')
+    [Environment]::SetEnvironmentVariable($VarName, $Value, 'User')
+}
+
+function Write-TokenToProfile {
+    param([string]$Token)
+    Write-EnvToProfile "OPENCLAW_GATEWAY_TOKEN" $Token "OpenClaw Gateway Token"
 }
 
 # ======================================================================
@@ -636,6 +658,324 @@ function Phase4-Init {
         }
     } else {
         Ok "Config exists: $OPENCLAW_CONFIG"
+    }
+
+    # -- Model Setup --
+    if (-not $script:ArgSkipModel) {
+        $existingModel = Config-Read "agents.defaults.model.primary"
+
+        if ($existingModel -and -not $script:ArgModelProvider) {
+            Ok "Model: $existingModel (already configured)"
+        } else {
+            $provider = $script:ArgModelProvider
+            if (-not $provider -and -not $script:NonInteractive) {
+                Write-Host ""
+                Write-Host "  Select LLM provider:"
+                Write-Host "    1)  " -NoNewline; Write-Host "anthropic" -ForegroundColor White -NoNewline; Write-Host "          - Claude"
+                Write-Host "    2)  " -NoNewline; Write-Host "openai" -ForegroundColor White -NoNewline; Write-Host "             - GPT / o-series"
+                Write-Host "    3)  " -NoNewline; Write-Host "openai-codex" -ForegroundColor White -NoNewline; Write-Host "       - Codex (ChatGPT Plus OAuth)"
+                Write-Host "    4)  " -NoNewline; Write-Host "google" -ForegroundColor White -NoNewline; Write-Host "             - Gemini"
+                Write-Host "    5)  " -NoNewline; Write-Host "openrouter" -ForegroundColor White -NoNewline; Write-Host "         - OpenRouter (100+ models)"
+                Write-Host "    6)  " -NoNewline; Write-Host "xai" -ForegroundColor White -NoNewline; Write-Host "                - Grok"
+                Write-Host "    7)  " -NoNewline; Write-Host "mistral" -ForegroundColor White -NoNewline; Write-Host "            - Mistral"
+                Write-Host "    8)  " -NoNewline; Write-Host "groq" -ForegroundColor White -NoNewline; Write-Host "               - Groq (fast inference)"
+                Write-Host "    9)  " -NoNewline; Write-Host "zai" -ForegroundColor White -NoNewline; Write-Host "                - GLM / ChatGLM (Zhipu AI)"
+                Write-Host "    10) " -NoNewline; Write-Host "ollama" -ForegroundColor White -NoNewline; Write-Host "             - Local models (no API key)"
+                Write-Host "    11) " -NoNewline; Write-Host "openai-compatible" -ForegroundColor White -NoNewline; Write-Host "  - Custom endpoint"
+                Write-Host "    s)  Skip"
+                Write-Host ""
+
+                $choice = Prompt-Input "Select provider" "1"
+                $provider = switch ($choice) {
+                    { $_ -in '1','anthropic' }          { 'anthropic' }
+                    { $_ -in '2','openai' }             { 'openai' }
+                    { $_ -in '3','openai-codex','codex' } { 'openai-codex' }
+                    { $_ -in '4','google' }             { 'google' }
+                    { $_ -in '5','openrouter' }         { 'openrouter' }
+                    { $_ -in '6','xai' }                { 'xai' }
+                    { $_ -in '7','mistral' }            { 'mistral' }
+                    { $_ -in '8','groq' }               { 'groq' }
+                    { $_ -in '9','zai','glm' }          { 'zai' }
+                    { $_ -in '10','ollama' }            { 'ollama' }
+                    { $_ -in '11','openai-compatible' } { 'openai-compatible' }
+                    { $_ -in 's','S' }                  { '' }
+                    default { Warn "Unknown choice, skipping model setup"; '' }
+                }
+            }
+
+            if ($provider) {
+                # Interactive model selection per provider
+                $modelName = $script:ArgModelName
+                if (-not $modelName -and -not $script:NonInteractive) {
+                    Write-Host ""
+                    switch ($provider) {
+                        'anthropic' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "claude-sonnet-4-20250514" -ForegroundColor White -NoNewline; Write-Host "    - Sonnet 4 (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "claude-opus-4-20250514" -ForegroundColor White -NoNewline; Write-Host "      - Opus 4 (most capable)"
+                            Write-Host "    3) " -NoNewline; Write-Host "claude-haiku-4-20250414" -ForegroundColor White -NoNewline; Write-Host "     - Haiku 4 (fastest)"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'claude-sonnet-4-20250514' }
+                                '2' { 'claude-opus-4-20250514' }
+                                '3' { 'claude-haiku-4-20250414' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'claude-sonnet-4-20250514' }
+                            }
+                        }
+                        'openai' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "gpt-4o" -ForegroundColor White -NoNewline; Write-Host "                      - GPT-4o (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "gpt-4o-mini" -ForegroundColor White -NoNewline; Write-Host "                 - GPT-4o Mini (fast)"
+                            Write-Host "    3) " -NoNewline; Write-Host "o3" -ForegroundColor White -NoNewline; Write-Host "                          - o3 (reasoning)"
+                            Write-Host "    4) " -NoNewline; Write-Host "o4-mini" -ForegroundColor White -NoNewline; Write-Host "                     - o4-mini (reasoning, fast)"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'gpt-4o' }
+                                '2' { 'gpt-4o-mini' }
+                                '3' { 'o3' }
+                                '4' { 'o4-mini' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'gpt-4o' }
+                            }
+                        }
+                        'openai-codex' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "codex-mini-latest" -ForegroundColor White -NoNewline; Write-Host "           - Codex Mini (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "o4-mini" -ForegroundColor White -NoNewline; Write-Host "                     - o4-mini"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'codex-mini-latest' }
+                                '2' { 'o4-mini' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'codex-mini-latest' }
+                            }
+                        }
+                        'google' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "gemini-2.5-flash" -ForegroundColor White -NoNewline; Write-Host "            - 2.5 Flash (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "gemini-2.5-pro" -ForegroundColor White -NoNewline; Write-Host "              - 2.5 Pro (most capable)"
+                            Write-Host "    3) " -NoNewline; Write-Host "gemini-2.0-flash" -ForegroundColor White -NoNewline; Write-Host "            - 2.0 Flash (fast)"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'gemini-2.5-flash' }
+                                '2' { 'gemini-2.5-pro' }
+                                '3' { 'gemini-2.0-flash' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'gemini-2.5-flash' }
+                            }
+                        }
+                        'openrouter' {
+                            Write-Host "  Select model (or enter any OpenRouter model slug):"
+                            Write-Host "    1) " -NoNewline; Write-Host "anthropic/claude-sonnet-4" -ForegroundColor White -NoNewline; Write-Host "   - Claude Sonnet 4"
+                            Write-Host "    2) " -NoNewline; Write-Host "openai/gpt-4o" -ForegroundColor White -NoNewline; Write-Host "              - GPT-4o"
+                            Write-Host "    3) " -NoNewline; Write-Host "google/gemini-2.5-flash" -ForegroundColor White -NoNewline; Write-Host "    - Gemini 2.5 Flash"
+                            Write-Host "    4) " -NoNewline; Write-Host "deepseek/deepseek-chat" -ForegroundColor White -NoNewline; Write-Host "     - DeepSeek V3"
+                            Write-Host "    5) " -NoNewline; Write-Host "deepseek/deepseek-r1" -ForegroundColor White -NoNewline; Write-Host "       - DeepSeek R1"
+                            Write-Host "    c) Custom model slug"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'anthropic/claude-sonnet-4' }
+                                '2' { 'openai/gpt-4o' }
+                                '3' { 'google/gemini-2.5-flash' }
+                                '4' { 'deepseek/deepseek-chat' }
+                                '5' { 'deepseek/deepseek-r1' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model slug" }
+                                default { 'anthropic/claude-sonnet-4' }
+                            }
+                        }
+                        'xai' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "grok-3" -ForegroundColor White -NoNewline; Write-Host "                      - Grok 3 (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "grok-3-mini" -ForegroundColor White -NoNewline; Write-Host "                 - Grok 3 Mini (fast)"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'grok-3' }
+                                '2' { 'grok-3-mini' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'grok-3' }
+                            }
+                        }
+                        'mistral' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "mistral-large-latest" -ForegroundColor White -NoNewline; Write-Host "        - Mistral Large (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "mistral-medium-latest" -ForegroundColor White -NoNewline; Write-Host "       - Mistral Medium"
+                            Write-Host "    3) " -NoNewline; Write-Host "codestral-latest" -ForegroundColor White -NoNewline; Write-Host "            - Codestral (code)"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'mistral-large-latest' }
+                                '2' { 'mistral-medium-latest' }
+                                '3' { 'codestral-latest' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'mistral-large-latest' }
+                            }
+                        }
+                        'groq' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "llama-3.3-70b-versatile" -ForegroundColor White -NoNewline; Write-Host "     - Llama 3.3 70B (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "llama-3.1-8b-instant" -ForegroundColor White -NoNewline; Write-Host "        - Llama 3.1 8B (fastest)"
+                            Write-Host "    3) " -NoNewline; Write-Host "mixtral-8x7b-32768" -ForegroundColor White -NoNewline; Write-Host "          - Mixtral 8x7B"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'llama-3.3-70b-versatile' }
+                                '2' { 'llama-3.1-8b-instant' }
+                                '3' { 'mixtral-8x7b-32768' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'llama-3.3-70b-versatile' }
+                            }
+                        }
+                        'zai' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "glm-4-plus" -ForegroundColor White -NoNewline; Write-Host "                  - GLM-4 Plus (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "glm-4-air" -ForegroundColor White -NoNewline; Write-Host "                   - GLM-4 Air (fast)"
+                            Write-Host "    3) " -NoNewline; Write-Host "glm-4-flash" -ForegroundColor White -NoNewline; Write-Host "                 - GLM-4 Flash (fastest)"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'glm-4-plus' }
+                                '2' { 'glm-4-air' }
+                                '3' { 'glm-4-flash' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'glm-4-plus' }
+                            }
+                        }
+                        'ollama' {
+                            Write-Host "  Select model (or enter any Ollama model tag):"
+                            Write-Host "    1) " -NoNewline; Write-Host "llama3.3" -ForegroundColor White -NoNewline; Write-Host "                    - Llama 3.3 (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "qwen2.5-coder:32b" -ForegroundColor White -NoNewline; Write-Host "           - Qwen 2.5 Coder 32B"
+                            Write-Host "    3) " -NoNewline; Write-Host "deepseek-r1:32b" -ForegroundColor White -NoNewline; Write-Host "             - DeepSeek R1 32B"
+                            Write-Host "    c) Custom model tag"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'llama3.3' }
+                                '2' { 'qwen2.5-coder:32b' }
+                                '3' { 'deepseek-r1:32b' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model tag" }
+                                default { 'llama3.3' }
+                            }
+                        }
+                        'openai-compatible' {
+                            $modelName = Prompt-Input "Model name"
+                        }
+                    }
+                }
+
+                # Fallback defaults for non-interactive mode
+                if (-not $modelName) {
+                    $modelName = switch ($provider) {
+                        'anthropic'         { 'claude-sonnet-4-20250514' }
+                        'openai'            { 'gpt-4o' }
+                        'openai-codex'      { 'codex-mini-latest' }
+                        'google'            { 'gemini-2.5-flash' }
+                        'openrouter'        { 'anthropic/claude-sonnet-4' }
+                        'xai'               { 'grok-3' }
+                        'mistral'           { 'mistral-large-latest' }
+                        'groq'              { 'llama-3.3-70b-versatile' }
+                        'zai'               { 'glm-4-plus' }
+                        'ollama'            { 'llama3.3' }
+                        'openai-compatible' { Warn "No --model-name provided for openai-compatible; skipping model setup"; $provider = ''; '' }
+                        default             { '' }
+                    }
+                }
+
+                # Build primary model identifier: "provider/model"
+                $modelPrimary = "$provider/$modelName"
+
+                # Determine API key env var name (per OpenClaw docs)
+                $needsApiKey = $provider -notin 'openai-codex','ollama'
+                $apiKeyVar = switch ($provider) {
+                    'anthropic'         { 'ANTHROPIC_API_KEY' }
+                    'openai'            { 'OPENAI_API_KEY' }
+                    'openai-codex'      { '' }
+                    'google'            { 'GEMINI_API_KEY' }
+                    'openrouter'        { 'OPENROUTER_API_KEY' }
+                    'xai'               { 'XAI_API_KEY' }
+                    'mistral'           { 'MISTRAL_API_KEY' }
+                    'groq'              { 'GROQ_API_KEY' }
+                    'zai'               { 'ZAI_API_KEY' }
+                    'ollama'            { '' }
+                    'openai-compatible' { 'OPENAI_API_KEY' }
+                    default             { 'OPENAI_API_KEY' }
+                }
+
+                # Get API key
+                $apiKey = $script:ArgModelApiKey
+                if ($needsApiKey) {
+                    if (-not $apiKey -and $apiKeyVar) {
+                        $apiKey = [Environment]::GetEnvironmentVariable($apiKeyVar)
+                    }
+                    if (-not $apiKey -and -not $script:NonInteractive -and $apiKeyVar) {
+                        $apiKey = Prompt-Secret $apiKeyVar
+                    }
+                }
+
+                # Special note for OAuth-based providers
+                if ($provider -eq 'openai-codex' -and -not $script:NonInteractive) {
+                    Info "Codex uses ChatGPT Plus OAuth - run 'openclaw auth login' after install"
+                }
+
+                # Base URL for openai-compatible
+                $baseUrl = $script:ArgModelBaseUrl
+                if ($provider -eq 'openai-compatible' -and -not $baseUrl -and -not $script:NonInteractive) {
+                    $baseUrl = Prompt-Input "Base URL (e.g. https://api.example.com/v1)"
+                }
+
+                # Write model config to openclaw.json
+                Config-Backup
+                $env:MODEL_PRIMARY = $modelPrimary
+                $env:MODEL_BASE_URL = if ($baseUrl) { $baseUrl } else { "" }
+                $env:OC_FILE = $OPENCLAW_CONFIG
+                try {
+                    & node -e '
+                        const fs = require("fs");
+                        const f = process.env.OC_FILE;
+                        const config = JSON.parse(fs.readFileSync(f, "utf8"));
+                        if (!config.agents) config.agents = {};
+                        if (!config.agents.defaults) config.agents.defaults = {};
+                        if (!config.agents.defaults.model) config.agents.defaults.model = {};
+                        config.agents.defaults.model.primary = process.env.MODEL_PRIMARY;
+                        if (process.env.MODEL_BASE_URL) config.agents.defaults.model.baseUrl = process.env.MODEL_BASE_URL;
+                        else delete config.agents.defaults.model.baseUrl;
+                        const tmp = f + ".tmp." + process.pid;
+                        fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
+                        fs.renameSync(tmp, f);
+                    '
+                } finally {
+                    Remove-Item env:MODEL_PRIMARY -ErrorAction SilentlyContinue
+                    Remove-Item env:MODEL_BASE_URL -ErrorAction SilentlyContinue
+                }
+                Harden-ConfigPermissions
+                Ok "Model: $modelPrimary"
+
+                # Write API key to profile
+                if ($needsApiKey) {
+                    if ($apiKey -and $apiKeyVar) {
+                        Write-EnvToProfile $apiKeyVar $apiKey "OpenClaw LLM API Key"
+                        [Environment]::SetEnvironmentVariable($apiKeyVar, $apiKey)
+                        Ok "API key written to profile and user environment"
+                    } elseif ($apiKeyVar) {
+                        Warn "No API key provided - set $apiKeyVar before starting OpenClaw"
+                    }
+                }
+            }
+        }
     }
 
     # -- Gateway Token --
