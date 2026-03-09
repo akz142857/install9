@@ -16,7 +16,7 @@ MIN_NODE_MAJOR=22
 OPENCLAW_PKG="openclaw"
 OPENCLAW_CONFIG_DIR="$HOME/.openclaw"
 OPENCLAW_CONFIG="$OPENCLAW_CONFIG_DIR/openclaw.json"
-TOTAL_PHASES=7
+TOTAL_PHASES=8
 
 # ── CLI arguments ────────────────────────────────────────────────────
 NON_INTERACTIVE=false
@@ -71,10 +71,18 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --non-interactive)   NON_INTERACTIVE=true ;;
-      --channel)           ARG_CHANNEL="${2:-}"; shift ;;
-      --feishu-app-id)     ARG_FEISHU_APP_ID="${2:-}"; shift ;;
-      --feishu-app-secret) ARG_FEISHU_APP_SECRET="${2:-}"; shift ;;
-      --feishu-domain)     ARG_FEISHU_DOMAIN="${2:-}"; shift ;;
+      --channel)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--channel requires a value"; fi
+        ARG_CHANNEL="$2"; shift ;;
+      --feishu-app-id)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--feishu-app-id requires a value"; fi
+        ARG_FEISHU_APP_ID="$2"; shift ;;
+      --feishu-app-secret)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--feishu-app-secret requires a value"; fi
+        ARG_FEISHU_APP_SECRET="$2"; shift ;;
+      --feishu-domain)
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--feishu-domain requires a value"; fi
+        ARG_FEISHU_DOMAIN="$2"; shift ;;
       --skip-channel)      ARG_SKIP_CHANNEL=true ;;
       --skip-security)     ARG_SKIP_SECURITY=true ;;
       --skip-deps)         ARG_SKIP_DEPS=true ;;
@@ -155,10 +163,10 @@ confirm() {
 # In non-interactive mode, default to "no" instead of "yes"
 confirm_default_no() {
   if [[ "$NON_INTERACTIVE" == "true" ]]; then return 1; fi
-  echo -en "  ${BOLD}$1${NC} [Y/n]: "
+  echo -en "  ${BOLD}$1${NC} [y/N]: "
   local ans=""
   _read_input -r ans || true
-  [[ -z "$ans" || "$ans" =~ ^[Yy] ]]
+  [[ "$ans" =~ ^[Yy] ]]
 }
 
 # ── Platform helpers ─────────────────────────────────────────────────
@@ -310,7 +318,7 @@ banner() {
 }
 
 phase0_detect() {
-  phase "0" "Detecting environment"
+  phase "1" "Detecting environment"
 
   detect_platform
 
@@ -343,7 +351,7 @@ install_pkg() {
   fi
   info "Installing ${name} via ${PKG_MGR}..."
   case "$PKG_MGR" in
-    brew)   brew install "$name" 2>&1 | tail -1 ;;
+    brew)   brew install "$name" 2>&1 | tail -3 ;;
     apt)    need_sudo apt-get install -y "$name" 2>&1 | tail -1 ;;
     dnf)    need_sudo dnf install -y "$name" 2>&1 | tail -1 ;;
     yum)    need_sudo yum install -y "$name" 2>&1 | tail -1 ;;
@@ -404,14 +412,14 @@ install_node_via_pkg() {
         fail "Failed to download NodeSource setup script"
       fi
       ;;
-    pacman) install_pkg nodejs-lts-iron ;;
+    pacman) install_pkg nodejs-lts-jod ;;
     apk)    install_pkg "nodejs~=${MIN_NODE_MAJOR}" ;;
     *)      install_node_via_nvm ;;
   esac
 }
 
 phase1_deps() {
-  phase "1" "Checking dependencies"
+  phase "2" "Checking dependencies"
 
   if [[ "$ARG_SKIP_DEPS" == "true" ]]; then
     info "Skipped (--skip-deps)"
@@ -500,7 +508,7 @@ phase1_deps() {
 #  PHASE 2: Install OpenClaw
 # ══════════════════════════════════════════════════════════════════════
 phase2_install() {
-  phase "2" "Installing OpenClaw"
+  phase "3" "Installing OpenClaw"
 
   if command -v openclaw &>/dev/null; then
     local current_ver
@@ -533,10 +541,10 @@ phase2_install() {
   fi
 
   # Locate installation path — prefer current node version
-  OC_BIN=$(which openclaw 2>/dev/null || echo "")
+  OC_BIN=$(command -v openclaw 2>/dev/null || echo "")
   OC_ROOT=""
   if [[ -n "$OC_BIN" ]]; then
-    OC_ROOT=$(node -e "console.log(require('path').resolve('$(dirname "$OC_BIN")', '../lib/node_modules/openclaw'))" 2>/dev/null || echo "")
+    OC_ROOT=$(OC_BIN_DIR="$(dirname "$OC_BIN")" node -e "console.log(require('path').resolve(process.env.OC_BIN_DIR, '../lib/node_modules/openclaw'))" 2>/dev/null || echo "")
   fi
   if [[ -z "$OC_ROOT" || ! -d "$OC_ROOT" ]]; then
     # Try the current node's prefix first, then common fallbacks
@@ -563,7 +571,7 @@ phase2_install() {
 #  PHASE 3: Initialize configuration
 # ══════════════════════════════════════════════════════════════════════
 phase3_init() {
-  phase "3" "Initializing configuration"
+  phase "4" "Initializing configuration"
 
   # Run setup if no config exists
   if [[ ! -f "$OPENCLAW_CONFIG" ]]; then
@@ -675,7 +683,7 @@ CONF
 #  PHASE 4: Gateway service
 # ══════════════════════════════════════════════════════════════════════
 phase4_gateway() {
-  phase "4" "Setting up gateway service"
+  phase "5" "Setting up gateway service"
 
   # Install service
   info "Installing gateway service..."
@@ -860,7 +868,7 @@ setup_channel_feishu() {
 }
 
 phase5_channel() {
-  phase "5" "Channel setup"
+  phase "6" "Channel setup"
 
   if [[ "$ARG_SKIP_CHANNEL" == "true" ]]; then
     info "Skipped (--skip-channel)"
@@ -898,7 +906,7 @@ phase5_channel() {
 #  PHASE 6: Security hardening & cleanup
 # ══════════════════════════════════════════════════════════════════════
 phase6_security() {
-  phase "6" "Security hardening & cleanup"
+  phase "7" "Security hardening & cleanup"
 
   if [[ "$ARG_SKIP_SECURITY" == "true" ]]; then
     info "Skipped (--skip-security)"
@@ -979,8 +987,10 @@ phase6_security() {
   local sessions_json="${sessions_dir}/sessions.json"
   if [[ -d "$sessions_dir" && -f "$sessions_json" ]]; then
     local orphans=0
+    local _old_nullglob
+    _old_nullglob=$(shopt -p nullglob 2>/dev/null || true)
+    shopt -s nullglob
     for f in "${sessions_dir}"/*.jsonl; do
-      [[ -f "$f" ]] || continue
       local session_id
       session_id=$(basename "$f" .jsonl)
       # Use exact JSON string match to avoid substring false positives
@@ -989,6 +999,7 @@ phase6_security() {
         orphans=$((orphans + 1))
       fi
     done
+    eval "$_old_nullglob"
     if [[ $orphans -gt 0 ]]; then
       ok "Cleaned ${orphans} orphan session file(s)"
       fixes=$((fixes + 1))
@@ -1015,7 +1026,7 @@ phase6_security() {
 #  PHASE 7: Summary
 # ══════════════════════════════════════════════════════════════════════
 phase7_summary() {
-  phase "7" "Setup complete"
+  phase "8" "Setup complete"
 
   local oc_version
   oc_version=$(openclaw --version 2>/dev/null || echo "unknown")
