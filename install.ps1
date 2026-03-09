@@ -679,9 +679,10 @@ function Phase4-Init {
                 Write-Host "    6)  " -NoNewline; Write-Host "xai" -ForegroundColor White -NoNewline; Write-Host "                - Grok"
                 Write-Host "    7)  " -NoNewline; Write-Host "mistral" -ForegroundColor White -NoNewline; Write-Host "            - Mistral"
                 Write-Host "    8)  " -NoNewline; Write-Host "groq" -ForegroundColor White -NoNewline; Write-Host "               - Groq (fast inference)"
-                Write-Host "    9)  " -NoNewline; Write-Host "zai" -ForegroundColor White -NoNewline; Write-Host "                - GLM / ChatGLM (Zhipu AI)"
-                Write-Host "    10) " -NoNewline; Write-Host "ollama" -ForegroundColor White -NoNewline; Write-Host "             - Local models (no API key)"
-                Write-Host "    11) " -NoNewline; Write-Host "openai-compatible" -ForegroundColor White -NoNewline; Write-Host "  - Custom endpoint"
+                Write-Host "    9)  " -NoNewline; Write-Host "minimax" -ForegroundColor White -NoNewline; Write-Host "            - MiniMax"
+                Write-Host "    10) " -NoNewline; Write-Host "zai" -ForegroundColor White -NoNewline; Write-Host "                - GLM / ChatGLM (Zhipu AI)"
+                Write-Host "    11) " -NoNewline; Write-Host "ollama" -ForegroundColor White -NoNewline; Write-Host "             - Local models (no API key)"
+                Write-Host "    12) " -NoNewline; Write-Host "openai-compatible" -ForegroundColor White -NoNewline; Write-Host "  - Custom endpoint"
                 Write-Host "    s)  Skip"
                 Write-Host ""
 
@@ -695,9 +696,10 @@ function Phase4-Init {
                     { $_ -in '6','xai' }                { 'xai' }
                     { $_ -in '7','mistral' }            { 'mistral' }
                     { $_ -in '8','groq' }               { 'groq' }
-                    { $_ -in '9','zai','glm' }          { 'zai' }
-                    { $_ -in '10','ollama' }            { 'ollama' }
-                    { $_ -in '11','openai-compatible' } { 'openai-compatible' }
+                    { $_ -in '9','minimax' }            { 'minimax' }
+                    { $_ -in '10','zai','glm' }         { 'zai' }
+                    { $_ -in '11','ollama' }            { 'ollama' }
+                    { $_ -in '12','openai-compatible' } { 'openai-compatible' }
                     { $_ -in 's','S' }                  { '' }
                     default { Warn "Unknown choice, skipping model setup"; '' }
                 }
@@ -839,6 +841,20 @@ function Phase4-Init {
                                 default { 'llama-3.3-70b-versatile' }
                             }
                         }
+                        'minimax' {
+                            Write-Host "  Select model:"
+                            Write-Host "    1) " -NoNewline; Write-Host "MiniMax-M2.5" -ForegroundColor White -NoNewline; Write-Host "                - M2.5 (recommended)"
+                            Write-Host "    2) " -NoNewline; Write-Host "MiniMax-M2.5-highspeed" -ForegroundColor White -NoNewline; Write-Host "      - M2.5 Highspeed (faster)"
+                            Write-Host "    c) Custom model name"
+                            Write-Host ""
+                            $mc = Prompt-Input "Select model" "1"
+                            $modelName = switch ($mc) {
+                                '1' { 'MiniMax-M2.5' }
+                                '2' { 'MiniMax-M2.5-highspeed' }
+                                { $_ -in 'c','C' } { Prompt-Input "Model name" }
+                                default { 'MiniMax-M2.5' }
+                            }
+                        }
                         'zai' {
                             Write-Host "  Select model:"
                             Write-Host "    1) " -NoNewline; Write-Host "glm-4-plus" -ForegroundColor White -NoNewline; Write-Host "                  - GLM-4 Plus (recommended)"
@@ -888,6 +904,7 @@ function Phase4-Init {
                         'xai'               { 'grok-3' }
                         'mistral'           { 'mistral-large-latest' }
                         'groq'              { 'llama-3.3-70b-versatile' }
+                        'minimax'           { 'MiniMax-M2.5' }
                         'zai'               { 'glm-4-plus' }
                         'ollama'            { 'llama3.3' }
                         'openai-compatible' { Warn "No --model-name provided for openai-compatible; skipping model setup"; $provider = ''; '' }
@@ -909,6 +926,7 @@ function Phase4-Init {
                     'xai'               { 'XAI_API_KEY' }
                     'mistral'           { 'MISTRAL_API_KEY' }
                     'groq'              { 'GROQ_API_KEY' }
+                    'minimax'           { 'MINIMAX_API_KEY' }
                     'zai'               { 'ZAI_API_KEY' }
                     'ollama'            { '' }
                     'openai-compatible' { 'OPENAI_API_KEY' }

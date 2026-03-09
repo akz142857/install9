@@ -792,9 +792,10 @@ CONF
         echo -e "    6)  ${BOLD}xai${NC}                — Grok"
         echo -e "    7)  ${BOLD}mistral${NC}            — Mistral"
         echo -e "    8)  ${BOLD}groq${NC}               — Groq (fast inference)"
-        echo -e "    9)  ${BOLD}zai${NC}                — GLM / ChatGLM (Zhipu AI)"
-        echo -e "    10) ${BOLD}ollama${NC}             — Local models (no API key)"
-        echo -e "    11) ${BOLD}openai-compatible${NC}  — Custom endpoint"
+        echo -e "    9)  ${BOLD}minimax${NC}            — MiniMax"
+        echo -e "    10) ${BOLD}zai${NC}                — GLM / ChatGLM (Zhipu AI)"
+        echo -e "    11) ${BOLD}ollama${NC}             — Local models (no API key)"
+        echo -e "    12) ${BOLD}openai-compatible${NC}  — Custom endpoint"
         echo -e "    s)  Skip"
         echo ""
         local choice
@@ -808,9 +809,10 @@ CONF
           6|xai)               provider="xai" ;;
           7|mistral)           provider="mistral" ;;
           8|groq)              provider="groq" ;;
-          9|zai|glm)           provider="zai" ;;
-          10|ollama)           provider="ollama" ;;
-          11|openai-compatible) provider="openai-compatible" ;;
+          9|minimax)           provider="minimax" ;;
+          10|zai|glm)          provider="zai" ;;
+          11|ollama)           provider="ollama" ;;
+          12|openai-compatible) provider="openai-compatible" ;;
           s|S)                 provider="" ;;
           *)                   warn "Unknown choice, skipping model setup"; provider="" ;;
         esac
@@ -943,6 +945,19 @@ CONF
                 c|C) model_name=$(prompt "Model name") ;;
                 *) model_name="llama-3.3-70b-versatile" ;;
               esac ;;
+            minimax)
+              echo -e "  Select model:"
+              echo -e "    1) ${BOLD}MiniMax-M2.5${NC}                — M2.5 (recommended)"
+              echo -e "    2) ${BOLD}MiniMax-M2.5-highspeed${NC}      — M2.5 Highspeed (faster)"
+              echo -e "    c) Custom model name"
+              echo ""
+              local mc; mc=$(prompt "Select model" "1")
+              case "$mc" in
+                1) model_name="MiniMax-M2.5" ;;
+                2) model_name="MiniMax-M2.5-highspeed" ;;
+                c|C) model_name=$(prompt "Model name") ;;
+                *) model_name="MiniMax-M2.5" ;;
+              esac ;;
             zai)
               echo -e "  Select model:"
               echo -e "    1) ${BOLD}glm-4-plus${NC}                  — GLM-4 Plus (recommended)"
@@ -989,6 +1004,7 @@ CONF
             xai)               model_name="grok-3" ;;
             mistral)           model_name="mistral-large-latest" ;;
             groq)              model_name="llama-3.3-70b-versatile" ;;
+            minimax)           model_name="MiniMax-M2.5" ;;
             zai)               model_name="glm-4-plus" ;;
             ollama)            model_name="llama3.3" ;;
             openai-compatible) warn "No --model-name provided for openai-compatible; skipping model setup"; provider="" ;;
@@ -1009,6 +1025,7 @@ CONF
           xai)               api_key_var="XAI_API_KEY" ;;
           mistral)           api_key_var="MISTRAL_API_KEY" ;;
           groq)              api_key_var="GROQ_API_KEY" ;;
+          minimax)           api_key_var="MINIMAX_API_KEY" ;;
           zai)               api_key_var="ZAI_API_KEY" ;;
           ollama)            needs_api_key=false ;;  # Local, no key needed
           openai-compatible) api_key_var="OPENAI_API_KEY" ;;
