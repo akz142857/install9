@@ -654,6 +654,7 @@ CONF
       const f = process.env.OC_FILE;
       const config = JSON.parse(fs.readFileSync(f, "utf8"));
       if (!config.gateway) config.gateway = {};
+      config.gateway.mode = "local";
       if (!config.gateway.auth) config.gateway.auth = {};
       config.gateway.auth.mode = "token";
       config.gateway.auth.token = process.env.GATEWAY_TOKEN;
@@ -685,13 +686,27 @@ CONF
 phase4_gateway() {
   phase "5" "Setting up gateway service"
 
-  # Install service
-  info "Installing gateway service..."
-  openclaw gateway install --force 2>&1 | grep -v "^$" | head -3 || true
+  if [[ "$INIT_SYSTEM" == "launchd" || "$INIT_SYSTEM" == "systemd" ]]; then
+    # Install as system service (launchd on macOS, systemd on Linux)
+    info "Installing gateway service (${INIT_SYSTEM})..."
+    openclaw gateway install --force 2>&1 | grep -v "^$" | head -3 || true
 
-  # Start/restart
-  info "Starting gateway..."
-  openclaw gateway restart 2>&1 | head -1 || true
+    info "Starting gateway..."
+    openclaw gateway restart 2>&1 | head -1 || true
+  else
+    # No service manager — run gateway in foreground mode, backgrounded
+    warn "No service manager (systemd/launchd) detected"
+    info "Starting gateway in foreground mode..."
+
+    local gw_log="$OPENCLAW_CONFIG_DIR/logs/gateway.log"
+    mkdir -p "$(dirname "$gw_log")"
+    nohup openclaw gateway >> "$gw_log" 2>&1 &
+    local gw_pid=$!
+    ok "Gateway started (PID: ${gw_pid})"
+    info "Log: ${gw_log}"
+    warn "Gateway will stop when this shell exits."
+    warn "For persistent service, use a process manager (e.g. supervisord, s6) or systemd."
+  fi
 
   # Verify connection with retries
   info "Verifying gateway connection..."
@@ -1075,13 +1090,30 @@ phase7_summary() {
 
   divider
   echo -e "  ${BOLD}Documentation:${NC}  https://docs.openclaw.ai"
-  echo -e "  ${BOLD}Dashboard:${NC}      http://127.0.0.1:${gw_port}/"
   echo ""
 
   if [[ "$NEED_TOKEN_FIX" == "true" ]]; then
     echo -e "  ${YELLOW}${BOLD}Important:${NC} Run ${CYAN}source ~/${SHELL_RC##*/}${NC} or open a new terminal"
     echo -e "  to activate the gateway token in your shell."
     echo ""
+  fi
+
+  # Dashboard URL — always display prominently
+  local dashboard_url="http://127.0.0.1:${gw_port}/"
+  divider
+  echo ""
+  echo -e "  ${GREEN}${BOLD}▶ Dashboard:${NC}  ${CYAN}${BOLD}${dashboard_url}${NC}"
+  echo ""
+
+  # Auto-open in browser (interactive mode only)
+  if [[ "$NON_INTERACTIVE" != "true" ]]; then
+    if [[ "$OS" == "darwin" ]]; then
+      open "$dashboard_url" 2>/dev/null && ok "Dashboard opened in browser" || true
+    elif command -v xdg-open &>/dev/null; then
+      xdg-open "$dashboard_url" 2>/dev/null && ok "Dashboard opened in browser" || true
+    elif command -v wslview &>/dev/null; then
+      wslview "$dashboard_url" 2>/dev/null && ok "Dashboard opened in browser" || true
+    fi
   fi
 }
 
