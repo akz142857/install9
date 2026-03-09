@@ -547,8 +547,8 @@ function Phase3-Install {
     Phase 3 "Installing OpenClaw"
 
     if (Get-Command openclaw -ErrorAction SilentlyContinue) {
-        $currentVer = & openclaw --version 2>$null
-        if (-not $currentVer) { $currentVer = "unknown" }
+        $currentVerRaw = & openclaw --version 2>$null
+        if ($currentVerRaw -match '(\d+\.\d+\.\d+)') { $currentVer = $Matches[1] } else { $currentVer = "unknown" }
         Ok "OpenClaw $currentVer already installed"
 
         if (Confirm-DefaultNo "Check for updates?") {
@@ -557,9 +557,15 @@ function Phase3-Install {
             if ($latest -and $latest -ne $currentVer) {
                 Info "New version available: $latest (current: $currentVer)"
                 if (Confirm "Upgrade to ${latest}?") {
-                    & npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | Select-Object -Last 3
-                    $newVer = & openclaw --version 2>$null
-                    Ok "Upgraded to $newVer"
+                    $upgradeResult = & npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | Out-String
+                    if ($LASTEXITCODE -eq 0) {
+                        $newVerRaw = & openclaw --version 2>$null
+                        if ($newVerRaw -match '(\d+\.\d+\.\d+)') { $newVer = $Matches[1] } else { $newVer = $newVerRaw }
+                        Ok "Upgraded to $newVer"
+                    } else {
+                        Warn "Upgrade failed. Try manually: npm install -g ${OPENCLAW_PKG}@latest"
+                        Warn "If you see ENOTEMPTY, run: npm cache clean --force && npm install -g ${OPENCLAW_PKG}@latest"
+                    }
                 }
             } else {
                 Ok "Already on latest version"

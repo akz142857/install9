@@ -655,7 +655,7 @@ phase3_install() {
 
   if command -v openclaw &>/dev/null; then
     local current_ver
-    current_ver=$(openclaw --version 2>/dev/null || echo "unknown")
+    current_ver=$(openclaw --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
     ok "OpenClaw ${current_ver} already installed"
 
     # In non-interactive mode, don't auto-upgrade (use confirm_default_no)
@@ -666,14 +666,19 @@ phase3_install() {
       if [[ -n "$latest" && "$latest" != "$current_ver" ]]; then
         info "New version available: ${latest} (current: ${current_ver})"
         if confirm "Upgrade to ${latest}?"; then
-          local npm_pfx
+          local npm_pfx upgrade_ok=true
           npm_pfx=$(npm prefix -g 2>/dev/null || echo "")
           if [[ -n "$npm_pfx" && ! -w "$npm_pfx" ]]; then
-            need_sudo npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | tail -3
+            need_sudo npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | tail -3 || upgrade_ok=false
           else
-            npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | tail -3
+            npm install -g "${OPENCLAW_PKG}@latest" 2>&1 | tail -3 || upgrade_ok=false
           fi
-          ok "Upgraded to $(openclaw --version 2>/dev/null)"
+          if [[ "$upgrade_ok" == "true" ]]; then
+            ok "Upgraded to $(openclaw --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          else
+            warn "Upgrade failed. Try manually: npm install -g ${OPENCLAW_PKG}@latest"
+            warn "If you see ENOTEMPTY, run: npm cache clean --force && npm install -g ${OPENCLAW_PKG}@latest"
+          fi
         fi
       else
         ok "Already on latest version"
