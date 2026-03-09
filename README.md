@@ -162,6 +162,7 @@ Both `install.sh` and `install.ps1` accept the same flags:
 | `--discord-token TOKEN` | Discord Bot Token |
 | `--uninstall` | Uninstall OpenClaw and clean up |
 | `--self-update` | Update the install9 command itself |
+| `--skip-model` | Skip model setup |
 | `--skip-channel` | Skip channel setup phase |
 | `--skip-security` | Skip security hardening phase |
 | `--skip-deps` | Skip dependency installation |
@@ -193,10 +194,16 @@ Minimum required tenant scopes:
 | `im:message.group_at_msg:readonly` | Receive group @mentions |
 | `im:resource` | Access message resources (images, files) |
 | `im:chat.access_event.bot_p2p_chat:read` | Receive P2P chat events (WebSocket) |
+| `contact:contact.base:readonly` | Resolve sender names |
 
-Also required: **Bot capability** enabled, **WebSocket** event mode, and a **published app version**.
+Also required:
 
-> Need more capabilities? Add scopes as needed — e.g. `contact:contact.base:readonly` (read contacts), `im:chat.members:bot_access` (list group members), `im:message:readonly` (fetch message history), `application:bot.menu:write` (custom bot menu). See the [Feishu scope list](https://open.feishu.cn/document/server-docs/application-scope/introduction) for all available scopes.
+- **Bot capability** enabled
+- **Event subscription**: `im.message.receive_v1` (in Events & Callbacks > Event Config)
+- **WebSocket mode** (in Events & Callbacks > Callback Config)
+- **Published app version** (Version Management > Create Version > Publish)
+
+> Need more capabilities? Add scopes as needed — e.g. `im:chat.members:bot_access` (list group members), `im:message:readonly` (fetch message history), `application:bot.menu:write` (custom bot menu). See the [Feishu scope list](https://open.feishu.cn/document/server-docs/application-scope/introduction) for all available scopes.
 
 ## Supported platforms
 
@@ -214,7 +221,7 @@ Also required: **Bot capability** enabled, **WebSocket** event mode, and a **pub
 | Shell | Bash (POSIX-compatible) | PowerShell 5.1+ |
 | Node.js manager | nvm | fnm |
 | Interactive input | `/dev/tty` | `[Console]::ReadLine()` |
-| Token storage | Shell RC file (`export`) | PowerShell profile + user env var |
+| Token storage | Shell RC + `~/.openclaw/.env` | PowerShell profile + user env var + `~/.openclaw/.env` |
 | Crypto | `openssl rand` | `.NET RandomNumberGenerator` |
 | JSON parsing | `jq` / `node` | `ConvertFrom-Json` / `node` |
 

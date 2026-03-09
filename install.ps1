@@ -817,12 +817,21 @@ function Phase4-Init {
                 Harden-ConfigPermissions
                 Ok "Model: $modelPrimary"
 
-                # Write API key to profile
+                # Write API key to profile and .env (gateway service reads .env)
                 if ($needsApiKey) {
                     if ($apiKey -and $apiKeyVar) {
                         Write-EnvToProfile $apiKeyVar $apiKey "OpenClaw LLM API Key"
                         [Environment]::SetEnvironmentVariable($apiKeyVar, $apiKey)
                         Ok "API key written to profile and user environment"
+
+                        # Also write to .env so the gateway service can read it
+                        $envFile = Join-Path $OPENCLAW_CONFIG_DIR ".env"
+                        if (Test-Path $envFile) {
+                            $lines = Get-Content $envFile | Where-Object { $_ -notmatch "^$apiKeyVar=" }
+                            Set-Content $envFile -Value $lines
+                        }
+                        Add-Content $envFile "${apiKeyVar}=${apiKey}"
+                        Ok "API key written to $envFile"
                     } elseif ($apiKeyVar) {
                         Warn "No API key provided - set $apiKeyVar before starting OpenClaw"
                     }
@@ -1105,11 +1114,13 @@ function Setup-ChannelFeishu {
 
             while (-not $openId) {
                 # Auto-approve any pending pairing requests
+                $pairingApproved = $false
                 $pairingOut = & openclaw pairing list 2>&1 | Out-String
                 $pairingCodes = [regex]::Matches($pairingOut, '[A-Z0-9]{8}') | ForEach-Object { $_.Value }
                 foreach ($code in $pairingCodes) {
                     Info "Auto-approving pairing code: $code"
                     & openclaw pairing approve feishu $code --notify 2>&1 | Out-Null
+                    $pairingApproved = $true
                 }
                 if ($pairingCodes) { Start-Sleep -Seconds 2 }
 
@@ -1124,7 +1135,11 @@ function Setup-ChannelFeishu {
                     Info "Detected Open ID: $openId"
                     $openId = Prompt-Input "Confirm Open ID" $openId
                 } else {
-                    Warn "No Open ID found. Send a message to your bot in Feishu first."
+                    if ($pairingApproved) {
+                        Ok "Pairing approved. Send another message to your bot in Feishu now."
+                    } else {
+                        Warn "No Open ID found. Send a message to your bot in Feishu first."
+                    }
                     $retry = Prompt-Optional "Press Enter to retry, or 's' to skip" ""
                     if ($retry -in 's','S') { break }
                 }

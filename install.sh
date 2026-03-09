@@ -930,12 +930,21 @@ CONF
         harden_config
         ok "Model: ${model_primary}"
 
-        # Write API key to shell RC
+        # Write API key to shell RC and .env (gateway service reads .env)
         if [[ "$needs_api_key" == "true" ]]; then
           if [[ -n "$api_key" && -n "$api_key_var" ]]; then
             write_env_to_rc "$api_key_var" "$api_key" "OpenClaw LLM API Key"
             export "${api_key_var}=${api_key}"
             ok "API key written to ${SHELL_RC}"
+
+            # Also write to .env so the gateway service can read it
+            local env_file="$OPENCLAW_CONFIG_DIR/.env"
+            if [[ -f "$env_file" ]]; then
+              sed_inplace "/${api_key_var}/d" "$env_file"
+            fi
+            echo "${api_key_var}=${api_key}" >> "$env_file"
+            chmod 600 "$env_file"
+            ok "API key written to ${env_file}"
           elif [[ -n "$api_key_var" ]]; then
             warn "No API key provided — set ${api_key_var} before starting OpenClaw"
           fi
@@ -1203,12 +1212,14 @@ setup_channel_feishu() {
 
       while [[ -z "$open_id" ]]; do
         # Auto-approve any pending pairing requests
+        local pairing_approved=false
         local pairing_codes
         pairing_codes=$(openclaw pairing list 2>/dev/null | grep -Eo '[A-Z0-9]{8}' || true)
         if [[ -n "$pairing_codes" ]]; then
           while IFS= read -r code; do
             info "Auto-approving pairing code: ${code}"
             openclaw pairing approve feishu "$code" --notify 2>/dev/null || true
+            pairing_approved=true
           done <<< "$pairing_codes"
           sleep 2  # wait for session to be created
         fi
@@ -1220,7 +1231,11 @@ setup_channel_feishu() {
           info "Detected Open ID: ${open_id}"
           open_id=$(prompt "Confirm Open ID" "$open_id")
         else
-          warn "No Open ID found. Send a message to your bot in Feishu first."
+          if [[ "$pairing_approved" == "true" ]]; then
+            ok "Pairing approved. Send another message to your bot in Feishu now."
+          else
+            warn "No Open ID found. Send a message to your bot in Feishu first."
+          fi
           local retry
           retry=$(prompt_optional "Press Enter to retry, or 's' to skip" "")
           if [[ "$retry" == "s" || "$retry" == "S" ]]; then break; fi
