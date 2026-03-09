@@ -177,6 +177,27 @@ Both `install.sh` and `install.ps1` accept the same flags:
 | Slack | Supported | Bot Token (`xoxb-`) + App Token (`xapp-`, Socket Mode) |
 | Discord | Supported | Bot Token |
 
+### Feishu / Lark permissions
+
+The installer guides you through enabling the required permissions. You can also bulk-import them:
+
+1. Go to [Feishu Open Platform](https://open.feishu.cn) → your app → **Permissions → API Permissions**
+2. Import [`feishu-scopes.json`](feishu-scopes.json) to add all required scopes at once
+
+Minimum required tenant scopes:
+
+| Scope | Description |
+|-------|-------------|
+| `im:message:send_as_bot` | Send messages as bot |
+| `im:message.p2p_msg:readonly` | Receive direct messages |
+| `im:message.group_at_msg:readonly` | Receive group @mentions |
+| `im:resource` | Access message resources (images, files) |
+| `im:chat.access_event.bot_p2p_chat:read` | Receive P2P chat events (WebSocket) |
+
+Also required: **Bot capability** enabled, **WebSocket** event mode, and a **published app version**.
+
+> Need more capabilities? Add scopes as needed — e.g. `contact:contact.base:readonly` (read contacts), `im:chat.members:bot_access` (list group members), `im:message:readonly` (fetch message history), `application:bot.menu:write` (custom bot menu). See the [Feishu scope list](https://open.feishu.cn/document/server-docs/application-scope/introduction) for all available scopes.
+
 ## Supported platforms
 
 | OS | Architectures | Package managers | Service manager |
@@ -211,6 +232,7 @@ Interactive installation step-by-step guide:
 ├── docs/
 │   ├── install-ui-flow-zh.md   # Installation UI flow (Chinese)
 │   └── install-ui-flow-en.md   # Installation UI flow (English)
+├── feishu-scopes.json          # Feishu permission scopes (importable)
 ├── install.sh                  # Installer for macOS / Linux
 ├── install.ps1                 # Installer for Windows
 ├── LICENSE                     # Apache-2.0

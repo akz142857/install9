@@ -95,11 +95,15 @@ graph TD
     P5 -->|"s → 跳过"| P6
     P5 -->|"1 → feishu"| FeishuSetup
 
-    FeishuSetup["Feishu App Setup Guide:
-      1. Go to <b>https://open.feishu.cn</b>
-      2. Create an app → get App ID and App Secret
-      3. Enable permissions: Send/Read messages
-      4. Events: Use <b>WebSocket</b> mode"]
+    FeishuSetup["飞书应用配置指南:
+      1. 前往 <b>https://open.feishu.cn</b>
+      2. 创建应用 → 获取 App ID 和 App Secret
+      3. 添加应用能力 → <b>机器人</b>
+      4. 权限管理 → API 权限（导入 feishu-scopes.json 或手动添加）:
+         im:message:send_as_bot, im:message:readonly,
+         im:message.p2p_msg:readonly, im:resource, ...
+      5. 事件订阅: 使用 <b>WebSocket</b> 模式
+      6. 版本管理与发布 → 创建版本"]
 
     FeishuSetup --> FeishuInput
 

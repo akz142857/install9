@@ -98,8 +98,12 @@ graph TD
     FeishuSetup["Feishu App Setup Guide:
       1. Go to <b>https://open.feishu.cn</b>
       2. Create an app → get App ID and App Secret
-      3. Enable permissions: Send/Read messages
-      4. Events: Use <b>WebSocket</b> mode"]
+      3. Enable <b>bot capability</b>
+      4. Add permissions (import feishu-scopes.json or add manually):
+         im:message:send_as_bot, im:message:readonly,
+         im:message.p2p_msg:readonly, im:resource, ...
+      5. Events: Use <b>WebSocket</b> mode
+      6. Publish the app version"]
 
     FeishuSetup --> FeishuInput
 

@@ -765,8 +765,18 @@ function Setup-ChannelFeishu {
         Write-Host "  Feishu App Setup Guide:" -ForegroundColor Cyan
         Write-Host "    1. Go to " -NoNewline; Write-Host "https://open.feishu.cn" -ForegroundColor White
         Write-Host "    2. Create an app -> get " -NoNewline; Write-Host "App ID" -ForegroundColor Yellow -NoNewline; Write-Host " and " -NoNewline; Write-Host "App Secret" -ForegroundColor Yellow
-        Write-Host "    3. Enable permissions: Send/Read messages"
-        Write-Host "    4. Events: Use " -NoNewline; Write-Host "WebSocket" -ForegroundColor White -NoNewline; Write-Host " (persistent connection) mode"
+        Write-Host "    3. Enable " -NoNewline; Write-Host "bot capability" -ForegroundColor White -NoNewline; Write-Host " (add app capability -> Bot)"
+        Write-Host "    4. Add permissions (Permissions -> API Permissions):"
+        Write-Host "       im:message:send_as_bot                 Send messages" -ForegroundColor DarkGray
+        Write-Host "       im:message.p2p_msg:readonly             Receive DMs" -ForegroundColor DarkGray
+        Write-Host "       im:message.group_at_msg:readonly        Receive @mentions" -ForegroundColor DarkGray
+        Write-Host "       im:resource                             Images & files" -ForegroundColor DarkGray
+        Write-Host "       im:chat.access_event.bot_p2p_chat:read  Chat events" -ForegroundColor DarkGray
+        Write-Host "       " -NoNewline; Write-Host "Tip: " -ForegroundColor White -NoNewline; Write-Host "Import feishu-scopes.json from the install9 repo" -ForegroundColor Cyan
+        Write-Host "       to add all permissions at once." -ForegroundColor DarkGray
+        Write-Host "       Need more? Add scopes as needed (e.g. contact, chat members)." -ForegroundColor DarkGray
+        Write-Host "    5. Events: Use " -NoNewline; Write-Host "WebSocket" -ForegroundColor White -NoNewline; Write-Host " mode (Events -> WebSocket)"
+        Write-Host "    6. Publish the app version (Version Management -> Create Version)"
         Write-Host ""
 
         $appId = if ($script:ArgFeishuAppId) { $script:ArgFeishuAppId } else { Prompt-Input "App ID" $existingAppId }
