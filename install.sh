@@ -1181,10 +1181,13 @@ setup_channel_feishu() {
   # Post-setup reminder: event subscription and publish
   echo ""
   echo -e "  ${YELLOW}${BOLD}Next steps in Feishu console:${NC}"
-  echo -e "    1. Go to ${BOLD}Events${NC} > select ${BOLD}WebSocket${NC} (persistent connection)"
-  echo -e "       The connection should now be detected — click ${BOLD}Save${NC}"
-  echo -e "    2. Go to ${BOLD}Version Management${NC} > ${BOLD}Create Version${NC}"
-  echo -e "       Publish the app so permissions take effect"
+  echo -e "    1. ${BOLD}Permissions & Scopes${NC} — add these scopes:"
+  echo -e "       • ${BOLD}im:message.receive_v1${NC}          (receive messages)"
+  echo -e "       • ${BOLD}contact:contact.base:readonly${NC}  (resolve sender names)"
+  echo -e "    2. ${BOLD}Events & Callbacks > Event Config${NC} — add event:"
+  echo -e "       • ${BOLD}im.message.receive_v1${NC}          (receive messages)"
+  echo -e "    3. ${BOLD}Events & Callbacks > Callback Config${NC} — select ${BOLD}WebSocket${NC} (persistent connection)"
+  echo -e "    4. ${BOLD}Version Management${NC} > ${BOLD}Create Version${NC} > Publish"
   echo ""
 
   # Optional test message
@@ -1203,7 +1206,7 @@ setup_channel_feishu() {
         else
           warn "No Open ID found. Send a message to your bot in Feishu first."
           local retry
-          retry=$(prompt "Press Enter to retry, or 's' to skip" "")
+          retry=$(prompt_optional "Press Enter to retry, or 's' to skip" "")
           if [[ "$retry" == "s" || "$retry" == "S" ]]; then break; fi
         fi
       done

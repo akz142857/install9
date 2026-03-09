@@ -1082,10 +1082,13 @@ function Setup-ChannelFeishu {
     # Post-setup reminder: event subscription and publish
     Write-Host ""
     Write-Host "  Next steps in Feishu console:" -ForegroundColor Yellow
-    Write-Host "    1. Go to " -NoNewline; Write-Host "Events" -ForegroundColor White -NoNewline; Write-Host " -> select " -NoNewline; Write-Host "WebSocket" -ForegroundColor White
-    Write-Host "       The connection should now be detected - click " -NoNewline; Write-Host "Save" -ForegroundColor White
-    Write-Host "    2. Go to " -NoNewline; Write-Host "Version Management" -ForegroundColor White -NoNewline; Write-Host " -> " -NoNewline; Write-Host "Create Version" -ForegroundColor White
-    Write-Host "       Publish the app so permissions take effect"
+    Write-Host "    1. " -NoNewline; Write-Host "Permissions & Scopes" -ForegroundColor White -NoNewline; Write-Host " - add these scopes:"
+    Write-Host "       - " -NoNewline; Write-Host "im:message.receive_v1" -ForegroundColor White -NoNewline; Write-Host "          (receive messages)"
+    Write-Host "       - " -NoNewline; Write-Host "contact:contact.base:readonly" -ForegroundColor White -NoNewline; Write-Host "  (resolve sender names)"
+    Write-Host "    2. " -NoNewline; Write-Host "Events & Callbacks > Event Config" -ForegroundColor White -NoNewline; Write-Host " - add event:"
+    Write-Host "       - " -NoNewline; Write-Host "im.message.receive_v1" -ForegroundColor White -NoNewline; Write-Host "          (receive messages)"
+    Write-Host "    3. " -NoNewline; Write-Host "Events & Callbacks > Callback Config" -ForegroundColor White -NoNewline; Write-Host " - select " -NoNewline; Write-Host "WebSocket" -ForegroundColor White -NoNewline; Write-Host " (persistent connection)"
+    Write-Host "    4. " -NoNewline; Write-Host "Version Management" -ForegroundColor White -NoNewline; Write-Host " > " -NoNewline; Write-Host "Create Version" -ForegroundColor White -NoNewline; Write-Host " > Publish"
     Write-Host ""
 
     # Optional test message
@@ -1107,7 +1110,7 @@ function Setup-ChannelFeishu {
                     $openId = Prompt-Input "Confirm Open ID" $openId
                 } else {
                     Warn "No Open ID found. Send a message to your bot in Feishu first."
-                    $retry = Prompt-Input "Press Enter to retry, or 's' to skip" ""
+                    $retry = Prompt-Optional "Press Enter to retry, or 's' to skip" ""
                     if ($retry -in 's','S') { break }
                 }
             }
