@@ -1,9 +1,9 @@
 # install9
 
-One-click installer and initializer for [OpenClaw](https://github.com/akz142857/install9) — the multi-channel AI agent platform.
+One-click installer and initializer for [OpenClaw](https://github.com/OpenClaw) — the multi-channel AI agent platform.
 
 ```sh
-curl -fsSL install9.ai/openclaw | bash
+curl -fsSL https://install9.ai/openclaw | bash
 ```
 
 ## What it does
@@ -23,13 +23,13 @@ install9 is a single shell script that takes a fresh machine from zero to a full
 ### Quick install (interactive)
 
 ```sh
-curl -fsSL install9.ai/openclaw | bash
+curl -fsSL https://install9.ai/openclaw | bash
 ```
 
 ### Non-interactive
 
 ```sh
-curl -fsSL install9.ai/openclaw | bash -s -- \
+curl -fsSL https://install9.ai/openclaw | bash -s -- \
   --non-interactive \
   --channel feishu \
   --feishu-app-id cli_xxx \
@@ -41,14 +41,15 @@ curl -fsSL install9.ai/openclaw | bash -s -- \
 | Flag | Description |
 |------|-------------|
 | `--non-interactive` | Skip all prompts, use defaults |
-| `--channel feishu` | Auto-configure Feishu channel |
+| `--channel feishu\|lark` | Auto-configure Feishu/Lark channel |
 | `--feishu-app-id ID` | Feishu App ID |
 | `--feishu-app-secret SECRET` | Feishu App Secret |
 | `--feishu-domain feishu\|lark` | Feishu or Lark domain (default: `feishu`) |
 | `--skip-security` | Skip security hardening phase |
 | `--skip-channel` | Skip channel setup phase |
 | `--skip-deps` | Skip dependency installation |
-| `--help` | Show help message |
+| `-h, --help` | Show help message |
+| `-v, --version` | Show installer version |
 
 ## Supported platforms
 
@@ -61,7 +62,6 @@ curl -fsSL install9.ai/openclaw | bash -s -- \
 
 ```
 .
-├── .github/workflows/ci.yml   # ShellCheck CI
 ├── install.sh                  # The installer script
 ├── LICENSE                     # Apache-2.0
 └── README.md
@@ -77,7 +77,7 @@ Dry-run in a container:
 
 ```sh
 docker run --rm -it ubuntu:22.04 bash -c \
-  "apt-get update && apt-get install -y curl && bash <(curl -fsSL install9.ai/openclaw)"
+  "apt-get update && apt-get install -y curl && bash <(curl -fsSL https://install9.ai/openclaw)"
 ```
 
 Or run locally:
