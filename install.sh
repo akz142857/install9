@@ -16,7 +16,7 @@ MIN_NODE_MAJOR=22
 OPENCLAW_PKG="openclaw"
 OPENCLAW_CONFIG_DIR="$HOME/.openclaw"
 OPENCLAW_CONFIG="$OPENCLAW_CONFIG_DIR/openclaw.json"
-TOTAL_PHASES=8
+TOTAL_PHASES=9
 INSTALL9_BIN="$HOME/.local/bin/install9"
 INSTALL9_URL="https://install9.ai/openclaw"
 
@@ -36,6 +36,7 @@ ARG_SKIP_SECURITY=false
 ARG_SKIP_CHANNEL=false
 ARG_SKIP_DEPS=false
 ARG_SKIP_MODEL=false
+ARG_BROWSER=false
 
 # ── Colors & output (defined early so parse_args can use warn) ──────
 if { [[ -t 1 ]] || [[ -t 2 ]]; } && [[ "${TERM:-}" != "dumb" ]]; then
@@ -77,6 +78,7 @@ Options:
   --model-api-key <key>        API key for the LLM provider
   --model-base-url <url>       Base URL (for openai-compatible provider)
   --skip-model                 Skip model setup
+  --browser                    Set up Browser Attach-only Mode (Chrome CDP)
   --uninstall                  Uninstall OpenClaw and clean up
   --self-update                Update the install9 command itself
   --skip-channel               Skip channel setup
@@ -173,6 +175,7 @@ parse_args() {
         if [[ -z "${2:-}" || "${2:-}" == --* ]]; then fail "--model-base-url requires a value"; fi
         ARG_MODEL_BASE_URL="$2"; shift ;;
       --skip-model)        ARG_SKIP_MODEL=true ;;
+      --browser)           ARG_BROWSER=true ;;
       --uninstall)         ARG_UNINSTALL=true ;;
       --self-update)       ARG_SELF_UPDATE=true ;;
       --skip-channel)      ARG_SKIP_CHANNEL=true ;;
@@ -367,7 +370,8 @@ config_read() {
 
 config_backup() {
   if [[ -f "$OPENCLAW_CONFIG" ]]; then
-    local bak="${OPENCLAW_CONFIG}.bak.$(date +%s)"
+    local bak
+    bak="${OPENCLAW_CONFIG}.bak.$(date +%s)"
     cp "$OPENCLAW_CONFIG" "$bak"
     chmod 600 "$bak" 2>/dev/null || true
     # Keep only the last 5 backups
@@ -1722,8 +1726,8 @@ phase7_security() {
   fi
 
   # ── Harden permissions on backup files ──
-  # shellcheck disable=SC2012
-  for bak_file in $(ls -1 "${OPENCLAW_CONFIG}".bak.* 2>/dev/null); do
+  for bak_file in "${OPENCLAW_CONFIG}".bak.*; do
+    [[ -f "$bak_file" ]] || continue
     chmod 600 "$bak_file" 2>/dev/null || true
   done
 
@@ -1735,10 +1739,173 @@ phase7_security() {
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  PHASE 8: Summary
+#  PHASE 8: Browser Attach-only Mode (optional)
 # ══════════════════════════════════════════════════════════════════════
-phase8_summary() {
-  phase "8" "Setup complete"
+phase8_browser() {
+  phase "8" "Browser setup"
+
+  # Only run if --browser flag is set, or user opts in interactively
+  local do_browser=false
+  if [[ "$ARG_BROWSER" == "true" ]]; then
+    do_browser=true
+  elif [[ "$NON_INTERACTIVE" != "true" ]]; then
+    local existing_browser
+    existing_browser=$(config_read "browser.enabled")
+    if [[ "$existing_browser" == "true" ]]; then
+      ok "Browser Attach-only Mode: already configured"
+      if ! confirm_default_no "Reconfigure browser?"; then
+        return
+      fi
+      do_browser=true
+    else
+      if confirm_default_no "Enable Browser Attach-only Mode? (control Chrome via CDP)"; then
+        do_browser=true
+      fi
+    fi
+  fi
+
+  if [[ "$do_browser" != "true" ]]; then
+    info "Skipped (use --browser to enable)"
+    return
+  fi
+
+  # ── 1. Write browser config ──
+  info "Configuring Browser Attach-only Mode..."
+  config_backup
+  config_write '
+    if (!config.browser) config.browser = {};
+    config.browser.enabled = true;
+    config.browser.attachOnly = true;
+    config.browser.evaluateEnabled = true;
+    config.browser.cdpUrl = "http://localhost:9222";
+
+    // Ensure "browser" is in the agent tools allowlist
+    if (config.agents?.list) {
+      for (const agent of config.agents.list) {
+        if (agent.tools?.alsoAllow && !agent.tools.alsoAllow.includes("browser")) {
+          agent.tools.alsoAllow.push("browser");
+        }
+      }
+    }
+  '
+  harden_config
+  ok "Browser config written (attachOnly, cdpUrl: http://localhost:9222)"
+
+  # ── 1b. Restart gateway to pick up new config ──
+  info "Restarting gateway to apply browser config..."
+  openclaw gateway restart 2>&1 | head -1 || true
+
+  # ── 2. Install Chrome extension ──
+  info "Installing Chrome extension..."
+  local ext_path
+  ext_path=$(openclaw browser extension path 2>/dev/null || echo "")
+  if [[ -z "$ext_path" || ! -d "$ext_path" ]]; then
+    openclaw browser extension install 2>&1 | tail -3 || true
+    ext_path=$(openclaw browser extension path 2>/dev/null || echo "")
+  fi
+
+  if [[ -n "$ext_path" && -d "$ext_path" ]]; then
+    ok "Chrome extension: ${ext_path}"
+  else
+    warn "Extension install failed. Try manually: openclaw browser extension install"
+  fi
+
+  # ── 3. Detect Chrome path ──
+  local chrome_bin=""
+  if [[ "$OS" == "darwin" ]]; then
+    if [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
+      chrome_bin="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    fi
+  else
+    for candidate in google-chrome google-chrome-stable chromium-browser chromium; do
+      if command -v "$candidate" &>/dev/null; then
+        chrome_bin="$candidate"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$chrome_bin" ]]; then
+    warn "Chrome/Chromium not found. Install Chrome and re-run."
+  else
+    ok "Chrome: ${chrome_bin}"
+  fi
+
+  # ── 4. Show gateway token for extension ──
+  local gw_token
+  gw_token=$(config_read "gateway.auth.token")
+
+  # ── 5. Manual steps ──
+  echo ""
+  echo -e "  ${CYAN}${BOLD}Browser setup — manual steps required:${NC}"
+  echo ""
+  echo -e "  ${BOLD}Step 1:${NC} Launch Chrome with remote debugging:"
+  echo ""
+  if [[ "$OS" == "darwin" ]]; then
+    echo -e "    ${DIM}/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\\\${NC}"
+  else
+    echo -e "    ${DIM}google-chrome \\\\${NC}"
+  fi
+  echo -e "    ${DIM}  --remote-debugging-port=9222 \\\\${NC}"
+  echo -e "    ${DIM}  --user-data-dir=/tmp/openclaw \\\\${NC}"
+  echo -e "    ${DIM}  --no-first-run --no-default-browser-check${NC}"
+  echo ""
+  echo -e "  ${BOLD}Step 2:${NC} Load the extension in Chrome:"
+  echo -e "    1. Open ${CYAN}chrome://extensions${NC}"
+  echo -e "    2. Enable ${BOLD}Developer mode${NC} (top-right)"
+  echo -e "    3. Click ${BOLD}Load unpacked${NC} → select:"
+  echo -e "       ${CYAN}${ext_path:-~/.openclaw/browser/chrome-extension}${NC}"
+  echo ""
+  echo -e "  ${BOLD}Step 3:${NC} Configure the extension:"
+  echo -e "    1. Open extension ${BOLD}Options${NC}"
+  echo -e "    2. Port: ${CYAN}18792${NC} (default)"
+  echo -e "    3. Gateway token (copy from below):"
+  if [[ -n "$gw_token" ]]; then
+    local masked="${gw_token:0:8}...${gw_token: -8}"
+    echo -e "       ${DIM}${masked}${NC}"
+    echo -e "       ${YELLOW}Full token: openclaw config get gateway.auth.token${NC}"
+  else
+    echo -e "       ${YELLOW}Run: openclaw config get gateway.auth.token${NC}"
+  fi
+  echo -e "    4. Click ${BOLD}Save${NC}"
+  echo ""
+  echo -e "  ${BOLD}Step 4:${NC} Click the ${BOLD}OpenClaw Browser Relay${NC} toolbar icon (badge → ${GREEN}ON${NC})"
+  echo ""
+
+  # ── 6. Wait for user and verify ──
+  if [[ "$NON_INTERACTIVE" != "true" ]]; then
+    echo -e "  ${DIM}Complete the steps above, then press Enter to verify...${NC}"
+    _read_input -r || true
+
+    local tabs_out
+    tabs_out=$(openclaw browser tabs 2>&1 || true)
+    if echo "$tabs_out" | grep -q "http"; then
+      ok "Browser connected! Tabs detected:"
+      echo "$tabs_out" | head -5 | while IFS= read -r line; do
+        echo -e "    ${line}"
+      done
+    else
+      warn "No tabs detected. Check the steps above and try:"
+      echo -e "    ${CYAN}openclaw browser status${NC}"
+      echo -e "    ${CYAN}openclaw browser tabs${NC}"
+    fi
+  else
+    warn "Manual steps required: launch Chrome with --remote-debugging-port=9222,"
+    warn "load the extension, and configure the gateway token."
+    warn "See: https://docs.openclaw.ai/tools/chrome-extension"
+  fi
+
+  echo ""
+  divider
+  echo -e "  ${BOLD}Documentation:${NC} https://docs.openclaw.ai/tools/chrome-extension"
+  echo ""
+}
+
+# ══════════════════════════════════════════════════════════════════════
+#  PHASE 9: Summary
+# ══════════════════════════════════════════════════════════════════════
+phase9_summary() {
+  phase "9" "Setup complete"
 
   local oc_version
   oc_version=$(openclaw --version 2>/dev/null || echo "unknown")
@@ -1951,6 +2118,7 @@ do_uninstall() {
     if [[ -f "$rc_file" ]] && grep -q "# install9 command" "$rc_file" 2>/dev/null; then
       sed_inplace '/# install9 command/d' "$rc_file"
       # Only remove .local/bin PATH lines added by install9 (match the exact export pattern)
+      # shellcheck disable=SC2016
       sed_inplace '/export PATH=.*\.local\/bin.*\$PATH/d' "$rc_file"
       sed_inplace '/fish_add_path.*\.local\/bin/d' "$rc_file"
       ok "Cleaned install9 PATH from: ${rc_file}"
@@ -2097,8 +2265,9 @@ main() {
   phase5_gateway
   phase6_channel
   phase7_security
+  phase8_browser
   self_install
-  phase8_summary
+  phase9_summary
 }
 
 main "$@"

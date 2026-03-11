@@ -25,7 +25,8 @@ install9 takes a fresh machine from zero to a fully configured OpenClaw instance
 5. **Gateway service setup** — Configures launchd (macOS), systemd (Linux), Scheduled Task (Windows), or foreground mode (Docker / containers) with secure token management
 6. **Channel integration** — Interactive guided setup for Feishu/Lark, Telegram, Slack, Discord
 7. **Security hardening** — File system isolation, command deny-lists, memory search controls
-8. **Dashboard** — Automatically opens the OpenClaw Dashboard in browser on completion
+8. **Browser setup** — Optional [Browser Attach-only Mode](docs/browser-setup.md) to control Chrome via CDP (`--browser`)
+9. **Dashboard** — Automatically opens the OpenClaw Dashboard in browser on completion
 
 ## Usage
 
@@ -160,6 +161,7 @@ Both `install.sh` and `install.ps1` accept the same flags:
 | `--slack-bot-token TOKEN` | Slack Bot Token (`xoxb-...`) |
 | `--slack-app-token TOKEN` | Slack App Token (`xapp-...`, for Socket Mode) |
 | `--discord-token TOKEN` | Discord Bot Token |
+| `--browser` | Set up Browser Attach-only Mode (Chrome CDP) |
 | `--uninstall` | Uninstall OpenClaw and clean up |
 | `--self-update` | Update the install9 command itself |
 | `--skip-model` | Skip model setup |
@@ -225,6 +227,19 @@ Also required:
 | Crypto | `openssl rand` | `.NET RandomNumberGenerator` |
 | JSON parsing | `jq` / `node` | `ConvertFrom-Json` / `node` |
 
+## Browser Attach-only Mode
+
+OpenClaw can control a Chrome browser via the Chrome DevTools Protocol (CDP). Use the `--browser` flag during installation, or set it up interactively:
+
+```sh
+install9 --browser
+```
+
+This configures CDP, installs the Chrome extension, and guides you through connecting. See the full guide:
+
+- [English](docs/browser-setup.md)
+- [中文版](docs/browser-setup-zh.md)
+
 ## Installation UI flow
 
 Interactive installation step-by-step guide:
@@ -237,6 +252,8 @@ Interactive installation step-by-step guide:
 ```
 .
 ├── docs/
+│   ├── browser-setup.md        # Browser Attach-only Mode guide
+│   ├── browser-setup-zh.md     # Browser Attach-only Mode guide (Chinese)
 │   ├── install-ui-flow-zh.md   # Installation UI flow (Chinese)
 │   └── install-ui-flow-en.md   # Installation UI flow (English)
 ├── feishu-scopes.json          # Feishu permission scopes (importable)
